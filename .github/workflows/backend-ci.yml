@@ -1,0 +1,68 @@
+# Backend CI (BE-01). Runs on every pull request and on pushes to the main branches.
+# The frontend has its own workflow in ci.yml.
+name: Backend CI
+
+on:
+  pull_request:
+  push:
+    branches: [dev, stage, main]
+
+jobs:
+  # Lint, typecheck, unit tests and integration tests against a real MongoDB.
+  test:
+    name: Backend lint and tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    # A throwaway MongoDB container just for this run (the "test database").
+    services:
+      mongodb:
+        image: mongo:8
+        ports:
+          - 27017:27017
+
+    env:
+      NODE_ENV: test
+      MONGODB_URI: mongodb://127.0.0.1:27017/dream_builder_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: backend/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test:unit
+
+      - name: Integration tests
+        run: pnpm test:integration
+
+  # Fails if a password, API key or other secret is found anywhere in the repo's history.
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the full history, so old commits are scanned too
+
+      - name: Run gitleaks
+        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.18.4 detect --source /repo --redact --verbose

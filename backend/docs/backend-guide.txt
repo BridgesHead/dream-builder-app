@@ -1,0 +1,591 @@
+AWS-01 AWS dev environment
+
+Owner: Sami · Production layer (AWS)
+As Anas, I want a dev environment in the AWS UAE region ready early, so that every story deploys where the M3 demo will run.
+Build
+
+* A dev deployment target in the AWS UAE region for the API and the queue workers.
+* A MongoDB Atlas dev cluster on AWS in the UAE region, reachable only from dev and named developer IPs. If Atlas does not offer that region, Sami records the fallback in the setup note.
+* A private S3 bucket in the UAE region for story images.
+* Secrets in AWS Secrets Manager or Parameter Store, read by the API at runtime.
+* The deploy step of CI, so a merge to main deploys the API to dev.
+* Transactional email from Dina's domain, and a managed Redis if BullMQ is chosen.
+
+Acceptance criteria
+
+* The Atlas cluster and the secrets are ready by the end of Day 1, with connection details shared only through the secret store.
+* By the end of Day 2, a merge to main deploys the API to the dev URL with no manual steps.
+* Email sending, the S3 bucket and Redis (if chosen) are ready by the end of Day 2.
+* Atlas, S3 and Redis are not publicly reachable, and the API uses least-privilege credentials.
+* A setup note in the repo lists every resource, its region and who can access it.
+
+BE-01 API foundation and CI 
+
+Owner: Anas · Controller layer
+As the developer, I want the API skeleton and CI running on Day 1, so that every later story ships into the same base.
+Build
+
+* A Node.js and Express API under /api/v1, with config from environment variables, structured JSON logs and the shared error shape.
+* Local development against a MongoDB container until the AWS-01 Atlas cluster is ready.
+* CI on every pull request: lint, unit tests and integration tests against a test database. Sami adds the deploy step in AWS-01.
+* A secret scanner in CI. Secrets come from environment variables or the AWS secret store, never the repo.
+
+Acceptance criteria
+
+* GET /api/v1/health returns the build version and database status locally, and on the dev URL once AWS-01 lands.
+* A pull request with a failing test cannot be merged.
+* No secret appears in the repo or the logs.
+* The README covers local setup, environment variables and running the tests.
+
+BE-02 Data model 
+
+Owner: Anas · Model layer
+As the developer, I want every collection and its rules defined up front, so that accounts, stories and jobs share one consistent model.
+Build (Mongoose schemas)
+
+* users (parent, facilitator, admin), consents, children, stories (one document per story, with panels and comic cells inside), comments, jobs and auditLogs.
+* stories holds every StoryState field plus storyPath (two_act or three_act), status and the owning child.
+* One story lifecycle: draft → generating → child_review → parent_review → approved, with parent_review able to send it back to child_review.
+* Indexes for the queries the screens make: stories by child and by status, jobs by story.
+
+Acceptance criteria
+
+* Each schema rejects missing required fields and unknown values; heroPronoun accepts only he or she.
+* One shared function allows or refuses each status change, with a unit test for every allowed and every refused change.
+* A seed script creates the same test data as the Sprint 1 fixtures, so the front-end looks the same on real data.
+* A one-page data model note (collections, key fields, relations) is in the repo.
+
+BE-03 Parent accounts and verifiable consent 
+
+Owner: Anas · Controller layer
+As a parent, I want a secure account and a recorded consent for my child, so that only I control my family's data.
+Build (connects FE-03)
+
+* Register, verify email, log in, refresh, log out, forgot and reset password, and Google sign-in. Apple sign-in follows once Dina's Apple developer account is ready.
+* Passwords hashed with argon2 or bcrypt. A short-lived access token, and a refresh token in an httpOnly, secure cookie.
+* A verification email with a single-use link that expires after 24 hours. Until verified, the account cannot create child profiles.
+* A consent record: who, when, IP address, consent text version and method. New versions add a record and never overwrite the old one.
+* Rate limits on login, registration and password reset.
+
+Acceptance criteria
+
+* A parent cannot create a child profile until their email is verified and consent is recorded.
+* Verification and reset links work once, then fail with a clear message, and also fail after 24 hours.
+* Wrong password, existing email, weak password and expired session return distinct error codes that FE-03 already displays.
+* Repeated failed logins (default: 10 in 15 minutes) temporarily block further attempts.
+* Passwords and tokens never appear in logs or API responses.
+* The FE-03 screens run on the real API, with no mock left for these calls.
+
+Email verification plus a stored consent record is the Release 1 method, pending the legal review named in the proposal.
+
+BE-04 Child profiles and child sessions 
+
+Owner: Anas · Controller layer
+As a parent, I want to add my children and start a session for one of them, so that my child can make stories without an account of their own.
+Build (connects FE-04)
+
+* Create, read, update and remove child profiles under the signed-in parent.
+* A child session token, issued when the parent picks a child, limited to that child's story creation.
+* Leaving the child session needs the parent's password and returns a fresh parent session.
+
+Acceptance criteria
+
+* A parent sees and edits only their own children; another parent's child ID returns 404.
+* Age must be 8–14; the mode defaults from age, but the parent's choice is what gets stored.
+* A child session can create and edit only that child's stories. Parent account, other children, payment and admin routes all refuse it.
+* Removing a child is a logged soft delete; full deletion arrives with the Week 5 deletion workflow.
+* The FE-04 screens run on the real API.
+
+BE-05 Roles, access rules and audit log 
+
+Owner: Anas · Controller layer
+As the Dream Builder team, we want each role to reach only what it should, and every sensitive action recorded, so that we can answer the security reviews schools and partners send.
+Build
+
+* Roles: parent, child session, facilitator and admin. One access-check middleware on every route; no route ships without an explicit rule.
+* Facilitator: read-only access to the stories of children linked to them. In this sprint, links are created by an admin script.
+* Admin: accounts created only by a command-line script, never through sign-up. Admin routes sit under /api/v1/admin.
+* Audit log: an append-only record of sign-ins, consent, child profile changes, facilitator and admin story views, role changes and story approvals. Each entry holds who, what, which record, when and from where, but no story text or secrets.
+
+Acceptance criteria
+
+* An access-matrix test calls every route as every role and checks each allow or refuse.
+* A facilitator cannot edit, redraw, approve or delete anything; those calls return 403.
+* Each action listed above writes exactly one audit entry with actor, action, target and time.
+* No API route, including admin routes, can change or delete an audit entry.
+* The FE-14 portal story history reads from the real API.
+
+BE-06 Story migration from Postgres
+
+Owner: Anas · Data layer
+As Client, I want the stories already made in the prototype moved to the new database, so that nothing created so far is lost.
+Build
+
+* A re-runnable script that reads stories from the Replit Postgres database and writes them into stories.
+* Stories with no stored path are classed by their saved panels: 12 becomes two_act, 15 becomes three_act. Anything else is set aside for review, never padded or rewritten.
+* Stories saved with a "they" pronoun are migrated as saved and flagged for Dina's decision.
+* Migrated stories belong to one internal legacy account until Dina decides how they map to parents.
+* Images on fal.ai links are copied into the UAE bucket.
+
+Acceptance criteria
+
+* Running the script twice creates no duplicates; it keys on the original Postgres ID.
+* A report lists stories read, migrated, set aside (with reasons) and flagged; migrated plus set aside equals the Postgres total.
+* Ten migrated stories, picked at random, match their originals panel for panel, recorded in the PR.
+* No two-act story gains Act 3 panels, and no story is padded to 15.
+* Every migrated image loads from the UAE bucket, not a fal.ai link.
+* The script runs on a copy first; the real run happens only after Sami signs off the dry-run report.
+
+BE-07 Job queue and generation status
+
+Owner: Anas · Controller layer
+As a child waiting on Final Climb, I want my story made reliably in the background, so that a slow or failed step never loses my story.
+Build
+
+* A background job queue, with workers running apart from the API. The library is confirmed with Sami on Day 1.
+* Job types: story_text, panel_image, comic_script, comic_cell_image, title and panel_redraw.
+* Retries with backoff (default: 3 attempts), a timeout per job, and a concurrency limit so calls stay inside fal.ai rate limits.
+* A status endpoint per story: overall progress, plus text and image status per panel (queued, running, success, fallback, failed).
+* Admin Book Progress Detail (FE-15) reads the same status, plus enforcer violations.
+
+Acceptance criteria
+
+* Stopping a worker mid-job leads to a retry, never a lost job or a duplicate panel.
+* A job that fails every attempt is marked failed with its reason, and FE-06 shows its retry state.
+* Final Climb's progress comes from the real status endpoint.
+* Book Progress Detail shows real per-panel status for any story ID.
+* Each job records provider, model, duration and attempt count.
+
+Checkpoint, end of Day 6: Sami signs up, verifies, adds a child, starts a child session and opens migrated stories on dev. Fixes from that review fold into Days 7–11.
+
+BE-08 Story drafts and wizard API · Day 7
+
+Owner: Anas · Controller layer
+As a child, I want my answers saved as I go, so that I can leave and come back without losing my story.
+Build (connects FE-05, FE-06 and the FE-12 library)
+
+* Create a draft, save each wizard step, read it back, and list a child's stories.
+* Server-side validation of every StoryState field and the mode rules: Creator-only fields are refused on an Explorer draft.
+* storyPath saved at the Challenge Gate; choosing two_act clears the third-act fields.
+* Generation starts only from a complete draft for its chosen path.
+* oneMoreAmazingThing normalised on the server for every caller.
+
+Acceptance criteria
+
+* Reopening a saved draft restores every field, including Act 3, obstacle and brave-move fields (defect 1).
+* Generation for an incomplete draft is refused with a list of the missing steps, so Reveal can never show empty panels (defect 2).
+* Switching from three acts to two clears obstacles3, braveMove3, heroWords3 and thirdChallengeText.
+* A "they" pronoun, or Creator-only fields on an Explorer draft, return a validation error.
+* A direct API caller gets the same normalised oneMoreAmazingThing as the front-end (defect 8).
+* The wizard and library screens run on the real API; localStorage stays only as a local cache.
+
+BE-09 Story engine rules and enforcers · Days 8–9
+
+Owner: Anas · AI layer
+As a parent, I want every story to follow Dream Builder's story rules, so that the hero always tries, stumbles, regroups and grows, exactly as the product promises.
+Build
+
+* Port the prototype's story director and enforcers into an engine/ module with no HTTP or database code inside it.
+* Panel plans of 12 panels for two_act and 15 for three_act, with the PRD's labels and ending positions (PRD F4 and the 8-Beat Arc).
+* Deterministic enforcers that check the generated text, then repair it or trigger a targeted rewrite, logging each violation.
+* Fixes for defects 3, 4, 5, 6, 7 and 9, plus the ban on "shattered", "vanished", "dissolved", "fixed", "solved" and "gone" in resolution beats.
+
+Acceptance criteria
+
+* Each of the 10 Narrative Integrity Rules (PRD Section 6) has an automated test, run in CI on fixed sample outputs with no live AI calls.
+* Each of the six defects above has a test that fails on a known-bad sample and passes after the fix.
+* Panels 5 and 8 contain all eight beats, in order.
+* A two-act story never contains Act 3 text; on three acts, heroWords3 appears verbatim in quotation marks in Panel 12.
+* The final panel ends with "One real step today." and the Grand Finale contains "took [his/her] next brave step toward becoming the [Core Noun]" with the right pronoun.
+* Every violation is saved on the story's job record and shows in Book Progress Detail.
+
+BE-10 AI generation: story, pictures and title · Days 9–10
+
+Owner: Anas · AI layer
+As a child, I want my answers turned into a finished, illustrated story, so that I see my hero's journey come to life.
+Build (connects FE-06 Final Climb and FE-07 Reveal)
+
+* Story text through fal-ai/any-llm as structured JSON with exactly 12 or 15 panels. Use the prototype's model; if fal.ai has retired it, Sami picks the replacement before prompts are tuned.
+* One FLUX image job per panel: watercolour style for Explorer, concept art for Creator, a fixed seed from hero name and aspiration, and the Character Blueprint on every panel.
+* The Scene Director fallback chain (LLM, then the local Visual Brief table, then the Universal Triumph fallback), with each use recorded as fallback.
+* A title job: "[HeroName] and the [Poetic Version of the Dream]".
+* Every story text passes the BE-09 engine before it is saved; images are stored in the UAE bucket.
+
+Acceptance criteria
+
+* A complete draft produces a saved story with exactly 12 or 15 panels for its path, each with text and an image.
+* A wrong panel count or invalid JSON triggers a retry; after the last attempt the story is marked failed, never saved half-built.
+* A two-act story generates no text or image for Panels 13–15.
+* The story stores our bucket's image links, never fal.ai links.
+* Each story records the model, prompt version, fallback use, duration and attempts per panel.
+* Sami reviews 3 generated stories and confirms the hero keeps the same look, name and pronoun across panels.
+
+BE-11 Comic generation · Day 11 (first half)
+
+Owner: Anas · AI layer
+As a child who chose a comic, I want my story as comic pages, so that it feels like a real comic strip.
+Build (connects the FE-07 comic viewer)
+
+* A comic script job: 8 pages of 4 cells (32) for two acts, 10 pages of 4 (40) for three acts, in the chosen Comic Vibe.
+* Each cell holds a caption, optional dialogue, a bubble type (thought, speech or none) and an optional Tempo bubble.
+* One image job per cell, through the same queue, retries and status as BE-07.
+
+Acceptance criteria
+
+* Two-act comics have exactly 32 cells and three-act comics exactly 40, with no third-act cells in a two-act comic.
+* The two-act cells follow the beat-to-cell mapping Sami approves (PRD F7 requires one before build).
+* Tempo bubbles contain only music notation, never words.
+* The FE-07 comic viewer shows real generated comics on dev.
+
+BE-12 Draft review, edits and approval · Days 11–12
+
+Owner: Anas · Controller layer
+As a child and then as a parent, I want to polish the draft and approve it, so that the final story is the child's own work, checked by a grown-up.
+Build (connects FE-08 and FE-10)
+
+* Inline text edits per panel and per comic cell, keeping the previous text.
+* Single-panel picture redraw as a queue job; the old picture stays until the new one succeeds.
+* The Creator-mode sentence rewriter: one alternative per request, within the prototype's tone and word-count limits, retried when the output breaks them.
+* "I'm done!" moves the story to parent_review. Parents add comments and change requests per panel; a change request returns the story to child_review; approval moves it to approved and locks editing.
+
+Acceptance criteria
+
+* Edits and redraws are refused once a story is in parent_review or approved.
+* A failed redraw keeps the old picture and offers a retry.
+* The rewriter returns one sentence within the limit, and refuses Explorer requests with 403.
+* Parent comments are stored apart from the child's text, with author and time, and never change panel text.
+* Every status change writes an audit entry (BE-05).
+* FE-08 and FE-10 run end to end on the real API on dev.
+
+BE-13 M3 demo and hand-off 
+
+Owner: Anas · all layers, reviewed by Sami
+As Sami, I want the connected backend walked end to end, so that I can review it and demo it to Dina for M3.
+Demo script: register and verify a parent, add two children, start a child session, complete one Explorer story (two acts, storybook) and one Creator story (three acts, comic), watch Final Climb, edit a page, redraw a picture, rewrite a sentence, "I'm done!", a parent comment and change request, approve, then open the library, the facilitator portal and admin Book Progress Detail.
+Acceptance criteria
+
+* The demo script runs on dev with mocks left only for payments, voice upload, QR, deletion and print.
+* CI is green, including the Narrative Integrity Rule, defect and access-matrix tests.
+* Average generation time and AI cost are reported from 5 storybook runs and 5 comic runs.
+* A screen recording of the demo script (about 15 minutes) is shared with Sami.
+* A list of known gaps and open questions is shared, each tagged with its story ID, and the OpenAPI file matches the deployed API.User stories, Days 13–18 (Week 5)
+
+Days 13–18 connect the Week 5 integrations and move the backend to staging for the M4 demo. The physical test book, go-live and handover follow in Week 7.
+
+AWS-02 Staging, production and public endpoints 
+
+Owner: Sami · Production layer (AWS)
+As Anas, I want staging and production in the AWS UAE region, so that the Week 5 integrations are tested where Dina's users will run.
+Build
+
+* Staging and production copies of the AWS-01 setup, each with its own Atlas cluster, S3 buckets, secrets and deploy step. Production deploys only from a tagged release that Sami approves.
+* Private S3 buckets in the UAE region for voice recordings and print files, written only through short-lived upload links.
+* The listening-page domain over HTTPS, pointed at the public listening page.
+* Daily Atlas backups with point-in-time restore on staging and production, kept for the agreed retention period.
+* Error tracking, uptime checks on the API and the listening page, and alerts to Sami and Anas.
+
+Acceptance criteria
+
+* Staging is live by the end of Day 14 and deploys automatically from main.
+* Staging and production share no database, bucket or secret with dev or with each other.
+* The listening-page domain serves over HTTPS, and its link format is fixed before any QR is printed.
+* A test restore from backup into a scratch cluster succeeds and is recorded in the setup note.
+* Stopping the staging API triggers an alert within 5 minutes.
+* Every data store is in the AWS UAE region and listed in the setup note.
+
+BE-14 Prompt anonymisation
+
+Owner: Anas · AI layer
+As a parent, I want my child's identifying details kept out of every AI request, so that the outside AI provider never learns who my child is.
+Build
+
+* One outbound gate that every fal.ai call passes through; no worker calls fal.ai directly.
+* Before sending, the gate replaces the child's real name, the parent's name and email, and the author name with the hero name or a neutral placeholder.
+* Free-text answers (aspiration, brave words, safe place and similar) are checked for the family's known names, emails, phone numbers, addresses and links, which are removed or replaced.
+* The author name and dedication are added to the book locally and never sent to fal.ai.
+* Jobs store the anonymised prompt only.
+
+Acceptance criteria
+
+* A test child named "Aisha Rahman" whose answers include her own name, her school and her mother's phone number produces fal.ai requests with none of them.
+* A test or lint rule fails if any code calls fal.ai without the gate.
+* The hero name, pronoun and chosen words still reach the model, and the BE-09 rule tests still pass.
+* Job records and logs contain only anonymised text.
+
+BE-15 Voice upload and listening page
+
+Owner: Anas · Controller layer
+As a child who recorded my story, I want my voice saved and playable from the book, so that my family can hear me read it years from now.
+Build (connects FE-09 and FE-13)
+
+* When the story is saved, recordings move from the browser (IndexedDB) to the UAE voice bucket through short-lived upload links, one file per panel.
+* Server checks on audio type, file size and length per panel (defaults: 5 MB and 2 minutes).
+* A permanent voiceAnchorUrl per story, built on a random story UUID and saved on the story record.
+* A public, read-only listening endpoint: title, hero name, panel pictures and short-lived audio links. No login, no child's real name, no links into the app.
+* Editing a recorded panel's text marks that recording as stale.
+
+Acceptance criteria
+
+* Recordings uploaded from Chrome and Safari play back on the listening page on a phone.
+* The listening link stays the same after edits, re-recordings and redeploys.
+* The endpoint exposes nothing personal; any other UUID returns 404.
+* Panels without a recording are marked, so the page can offer read-aloud.
+* The listening endpoint is rate limited.
+
+BE-16 Data deletion on request 
+
+Owner: Anas · Data layer
+As a parent, I want to delete my child's data and know it is gone, so that I stay in control of my family's information.
+Build (connects the FE-12 privacy screen)
+
+* A deletion request that asks the parent to re-enter their password and lists what will be deleted.
+* A deletion job that removes the child profile, stories, comments, images, voice recordings and print files from MongoDB and S3, and ends the child's sessions and listening links.
+* Only the records agreed with Dina are kept, without story content (default: audit entries, consent record and payment records).
+* A confirmation email when the job finishes, stating when backups will age out.
+
+Acceptance criteria
+
+* After deletion, every API call and listening link for that child's content returns 404.
+* A test counts the child's records and S3 objects before and after: all reach zero except the agreed kept records.
+* A deletion while a hardback is printing waits until the order ships or is cancelled, and the parent is told.
+* The request and its completion each write an audit entry with no story content.
+* The job can run again safely and finishes even if one S3 delete fails the first time.
+
+BE-17 Stripe Checkout and orders
+
+Owner: Anas · Controller layer
+As a parent, I want to pay for a digital or printed book in AED, so that I can buy my child's story securely.
+Build (connects FE-11)
+
+* An orders collection: story, tier (digital or hardback), price in AED, hardback delivery address, payment status and print status.
+* Tier prices from server configuration set by Dina, never from the browser.
+* A Stripe Checkout session per order in AED, with card, Apple Pay and Google Pay. Test mode on dev and staging.
+* A webhook that verifies Stripe's signature, handles each event once, and marks the order paid, failed or cancelled.
+* After payment, the digital PDF becomes downloadable and a hardback order moves to the print queue (BE-18, BE-19).
+
+Acceptance criteria
+
+* Only an approved story can be bought, and only by its own parent.
+* A price changed in the browser request is ignored; the charge always matches server configuration.
+* A repeated or out-of-order webhook never changes a paid order twice.
+* Stripe test cards for success, decline and 3-D Secure each reach the right FE-11 screen.
+* Card details never reach our servers; only Stripe IDs are stored.
+* Each paid order writes an audit entry.
+
+BE-18 Print files and QR 
+
+Owner: Anas · Controller layer
+As a parent, I want a print-ready book with my child's voice on the back cover, so that the printed book looks right and plays their voice.
+Build (connects the FE-13 print preview)
+
+* A PDF job that renders the cover ("Story written by [author name]" and the date written), the Today's Mission page, every panel of the chosen path, and the back cover.
+* Hardback: a QR code on the back cover encoding the voiceAnchorUrl. Digital: a tappable playback link instead.
+* One print profile per publisher: trim size, bleed, margins, image resolution, colour profile and page-count rules. A generic profile is used until the publisher's specification arrives.
+* Files saved in the UAE print bucket and linked to the order.
+
+Acceptance criteria
+
+* A two-act book has the 12 panels and no Act 3 or blank pages; a three-act book has all 15.
+* The QR on a printed test sheet scans with a phone and opens the listening page.
+* Every image meets the profile's resolution (default 300 dpi) and sits inside the margins.
+* The cover shows the date the story was written, not the date the PDF was made.
+* Switching the print profile changes page size and bleed with no code change.
+* The digital PDF downloads only for the paying parent.
+
+BE-19 Publisher integration 
+
+Owner: Anas · Controller layer
+As a parent who ordered a hardback, I want my book sent to print and tracked automatically, so that I always know where it is.
+Build
+
+* A publisher adapter with one interface: submit order, read status and receive status updates. The selected publisher is the first adapter.
+* After payment, the order is submitted with its print file and delivery address.
+* Publisher statuses map to pending, printing, shipped and delivered, or failed with a reason.
+* Retries for failed submissions, and an alert to Sami after the last attempt.
+* If the publisher has no suitable API, the supported alternative agreed with Dina (for example, an admin export of print-ready orders).
+
+Acceptance criteria
+
+* A paid hardback order reaches the publisher's sandbox or test route with no manual steps.
+* Status changes reach the parent's order page and admin Book Progress Detail.
+* A rejected file or address shows a clear failure that admin can see and retry.
+* Status updates from the publisher are verified where the publisher supports it, and repeats are handled once.
+* If the publisher's technical details are not confirmed by Day 15, Sami is told that day; this story then delivers the adapter and a stub, and the live connection is rescheduled.
+
+BE-20 M4 staging demo and hand-off 
+
+Owner: Anas · all layers, reviewed by Sami
+As Sami, I want the integrated flow demonstrated on staging, so that I can show Dina milestone M4.
+Demo script (on staging): a parent signs up, a child makes a storybook with narration, the parent approves and pays for a hardback with a Stripe test card, the print file is generated with its QR code, the order goes to the publisher's sandbox and its status comes back, the QR is scanned on a phone, and a second child's data is deleted.
+Acceptance criteria
+
+* The demo script runs on staging with no backend mocks left.
+* fal.ai requests captured during the demo contain no real names (BE-14).
+* CI is green, including tests for webhooks, deletion, anonymisation and print layout.
+* A screen recording (about 15 minutes) and a list of known gaps, each tagged with its story ID, are shared with Sami.
+* The OpenAPI file, data model note and setup note match what is deployed.
+
+AWS-03 Scaling, cost and security hardening 
+
+Owner: Sami · Production layer (AWS)
+As Client, I want the AWS setup to stay up, scale under load and stay within budget, so that launch week is uneventful.
+Build
+
+* Autoscaling for the API and queue workers on staging and production, capped so fal.ai calls stay inside the BE-07 rate limits.
+* An edge firewall (AWS WAF or equivalent) with rate limits in front of the API and the listening page.
+* An IAM review: least-privilege roles for the API, workers and CI, no long-lived personal keys, and MFA on every human account.
+* Encryption checks: TLS on every endpoint, and encryption at rest on Atlas, S3 and backups.
+* AWS Budgets with cost alerts, and a dashboard for API errors, latency, queue depth, failed jobs and webhook failures.
+
+Acceptance criteria
+
+* During the BE-24 load test, staging scales out and back in with no errors or manual steps.
+* The IAM review is recorded in the setup note, and no service role has a wildcard admin policy.
+* A burst of requests from one address is throttled at the edge before it reaches the API.
+* A test budget alert reaches Sami and Dina.
+* The dashboard shows every metric above for staging and production.
+
+BE-21 Usability test support and test print order
+
+Owner: Anas · Production layer
+As Sami, I want staging ready for the closed usability test and a real test book ordered early, so that testers have a smooth session and the printed book arrives before final validation.
+Build
+
+* Scripts that create tester parent accounts and child profiles on staging, and purge all tester data after the test.
+* Test-mode payments and the publisher sandbox for testers, with fal.ai spend capped for the test.
+* One session ID on every API call and job in a tester's session, so any reported issue can be followed end to end.
+* A real test order with the selected publisher, from an approved staging story with narration and QR, once Dina approves the cost.
+* An issue log shared with Sami: each issue with severity (P1 blocks a journey, P2 hurts it, P3 is polish), steps and session ID.
+
+Acceptance criteria
+
+* Testers go through the real sign-up and consent flow, make a story, record narration, pay in test mode and place a sandbox order.
+* The purge script removes all tester data from Atlas and S3 and writes an audit entry.
+* Any reported issue can be traced to its API calls and jobs through its session ID.
+* The real test order is placed by the end of Day 20, and its order ID and expected delivery date go to Sami.
+* Every backend issue from the test is in the log with a severity, ready for BE-22.
+
+BE-22 Usability fixes
+
+Owner: Anas · All layers
+As a parent or child tester, I want the problems I hit fixed before launch, so that the real product works the way I expected.
+Build
+
+* Fix every P1 and P2 backend issue from the BE-21 log, most severe first.
+* Add a regression test for each fix.
+* Pass front-end issues to the front-end list, and agree with Sami which P3s wait until after launch.
+
+Acceptance criteria
+
+* No P1 issue is open at the end of Day 23.
+* Every P2 is fixed, or has a written reason and plan that Sami agrees.
+* Each fix has a regression test that fails before the fix and passes after it.
+* Sami repeats each fixed issue's steps on staging and closes it.
+
+BE-23 Application security hardening
+
+Owner: Anas · Production layer
+As a parent, I want my family's data protected against common attacks, so that I can trust Dream Builder with my child's stories and voice.
+Build (a review against the OWASP API Security Top 10, fixing what it finds)
+
+* A dependency audit in CI that fails on any high or critical vulnerability.
+* Security headers, a production CORS list, secure httpOnly cookies, refresh-token rotation and session expiry.
+* Size, type and length limits on voice uploads.
+* Signature and replay checks on every Stripe and publisher webhook.
+* Multi-factor sign-in for admin accounts.
+
+Acceptance criteria
+
+* The OWASP review is in the repo, with each item marked passed, fixed, or accepted with a reason.
+* Forged or replayed webhook calls are refused and logged.
+* An oversized or non-audio upload is refused before it reaches storage.
+* Admin sign-in requires a second factor.
+* The access-matrix test still passes after every change.
+
+BE-24 Load test and performance fixes
+
+Owner: Anas · Production layer
+As Client, I want to know how many families Dream Builder can serve at once, so that a busy launch week doesn't break it.
+Build
+
+* Load scripts (k6 or similar) for sign-in, wizard saves, generation, library, review and checkout.
+* A stub standing in for fal.ai, Stripe and the publisher during the run, so it costs nothing and tests our own limits.
+* Fixes for the slowest endpoints and queries, such as missing indexes or heavy responses.
+
+Acceptance criteria
+
+* The run meets the targets Sami confirms on Day 19 (default: 50 concurrent users, 10 stories generating at once, 95% of non-AI requests under 500 ms, no errors).
+* The job queue drains fully after the run, with no stuck or duplicated jobs.
+* The scripts and the before-and-after results are in the repo.
+* AWS-03 autoscaling is seen working during the run.
+
+BE-25 Final end-to-end validation and test book 
+
+Owner: Anas · All layers, reviewed by Sami
+As Client, I want the whole journey proven, down to the printed book in my hands, so that M5 rests on a real result and not just an order sent to an API.
+Build: the proposal's final acceptance run on the release build, plus inspection of the BE-21 test book.
+Acceptance criteria
+
+* One journey passes end to end: parent consent and child profile, story creation, review, voice recording and QR playback, payment, print file, publisher order and status updates.
+* The printed book is checked for page order, layout, images, cover and QR playback from a phone; problems go back to BE-18 or the publisher.
+* The nine defect tests and the 10 Narrative Integrity Rule tests pass on the release build.
+* Failed generation, failed payment, publisher rejection and expired session are each shown handled.
+* Access controls, a deletion request, a backup restore and an alert are each shown working.
+
+If the book has not arrived by Day 27, its inspection moves to the day it arrives, and M5 waits for it, as the proposal states.
+
+BE-26 Launch readiness and production data
+
+Owner: Anas · Production layer
+As Sami, I want production loaded and configured exactly as tested, so that go-live is a switch, not a scramble.
+Build
+
+* The final run of the BE-06 migration into production, after Sami signs off a dry run on a production copy.
+* Admin accounts created by script, and facilitator links seeded.
+* A configuration check that every production setting and secret is present and no test-mode key is.
+* Runbooks in the repo: deploy, roll back, restore a backup, rotate a key, retry a failed story, handle a refund or reprint, and process a deletion request.
+
+Acceptance criteria
+
+* Migration totals match the prototype database, and set-aside stories are listed for Dina.
+* The configuration check passes on production and fails if any test-mode key is present.
+* Sami has followed each runbook once on staging.
+* The release tagged for production is the build that passed BE-25.
+
+AWS-04 Production go-live and access handover
+
+Owner: Sami · Production layer (AWS)
+As Client, I want Dream Builder live on my own accounts with access in my team's hands, so that I own and control the product from day one.
+Build
+
+* Deploy the tagged release to production, point the domains at it, and register the production Stripe and publisher webhooks.
+* Switch on live Stripe keys, the publisher's live account and the production fal.ai key with its spending limit.
+* A rollback plan, rehearsed on staging, ready during the go-live window.
+* Smoke-test production with one internal account, then watch alerts through launch day.
+* Hand AWS, Atlas and the other accounts to Dina's named admins with least-privilege roles, and remove access no longer needed.
+
+Acceptance criteria
+
+* The production smoke test passes: sign-up, story generation, a live payment that is then refunded, and the listening page.
+* Rolling back to the previous release has been rehearsed on staging before go-live.
+* Alerts, backups and the dashboard are confirmed live on production.
+* Dina's admins can sign in to every account, and Sami's and Anas's access is cut to what the 30-day bug-fix period needs.
+* The setup note lists every production resource with its region, owner and access holders.
+
+BE-27 Go-live support and handover 
+
+Owner: Anas · Production layer
+As Client, I want the code, documents and operating instructions in my hands, so that any MERN developer can run and extend Dream Builder after launch.
+Build
+
+* Launch-day support with Sami: watch errors, jobs and payments, and fix anything blocking.
+* The handover pack: README, architecture note, data model note, OpenAPI file, environment variable list, runbooks and the known-issues list.
+* A handover walkthrough with Dina's team.
+
+Acceptance criteria
+
+* No P1 issue is open 24 hours after go-live.
+* Dina's team owns the code repository, and the handover pack is in it.
+* Every known issue is listed with its severity and whether the 30-day bug-fix period covers it.
+* Sami confirms the walkthrough is done, which with BE-25 and AWS-04 completes M5.
+

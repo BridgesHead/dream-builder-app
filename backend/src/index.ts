@@ -1,8 +1,32 @@
 import { config } from "./config.js";
 import { createApp } from "./app.js";
+import { connectToDatabase, disconnectFromDatabase } from "./db/connect.js";
+import { logger } from "./lib/logger.js";
+
+// Order matters: connect to the database FIRST, then open the door to requests.
+// If MongoDB is down we stop here, instead of running a server that fails on every request.
+try {
+  await connectToDatabase(config.mongodbUri);
+  logger.info("MongoDB connected");
+} catch (err) {
+  logger.fatal({ err }, "Could not connect to MongoDB. Is the MongoDB service running?");
+  process.exit(1);
+}
 
 const app = createApp();
 
-app.listen(config.port, () => {
-  console.log(`Dream Builder API listening on http://localhost:${config.port}`);
+const server = app.listen(config.port, () => {
+  logger.info({ port: config.port, version: config.version }, "Dream Builder API listening");
 });
+
+// Ctrl+C (SIGINT) or a stop from the host (SIGTERM): close things politely.
+// Stop taking new requests, then close the database connection, then exit.
+async function shutdown(signal: string): Promise<void> {
+  logger.info({ signal }, "Shutting down");
+  server.close();
+  await disconnectFromDatabase();
+  process.exit(0);
+}
+
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
