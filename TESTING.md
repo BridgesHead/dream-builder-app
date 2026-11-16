@@ -1,17 +1,33 @@
 # Walking through Dream Builder
 
-There is no backend yet, so sign-up and login accept any details — nothing is
-sent anywhere. Data is kept in the browser's localStorage.
+**Accounts are real now** (backend story BE-03): sign-up, login, email
+verification and password reset use the API and are saved in MongoDB. Child
+profiles, stories and orders are still kept only in the browser's localStorage
+until their backend stories (BE-04, BE-08, BE-17) are built.
+
+## Start both servers
+
+1. MongoDB running (see `backend/README.md`)
+2. Backend: in `backend/`, run `pnpm dev` (port 3000)
+3. Frontend: in this folder, run `npm run dev` (port 5173; it forwards `/api` to the backend)
 
 ## Test account
 
-| Field     | Value                  |
-| --------- | ---------------------- |
-| Full name | Test Parent            |
-| Email     | parent@example.com     |
-| Password  | DreamTest123 (any 8+ characters works) |
+`cd backend && pnpm seed` creates this parent (verified, with consent recorded).
+It empties the local database first.
 
-Tick both consent boxes on the sign-up page.
+| Field     | Value              |
+| --------- | ------------------ |
+| Full name | Sarah Jenkins      |
+| Email     | parent@example.com |
+| Password  | DreamTest123       |
+
+Or sign up with your own details: a password needs 8+ characters with a letter
+and a number. Tick both consent boxes.
+
+**Emails aren't really sent on your PC.** The verification and password-reset
+emails are printed in the terminal running the backend. Copy the link from
+there into the browser. Each link works once, for 24 hours.
 
 ## Full journey, in order
 
@@ -19,7 +35,8 @@ Start fresh first: open the site in a private/incognito window, or click
 **Sign out** on any parent page. If a "Preview mode" badge shows bottom-left,
 click **Exit**.
 
-1. `http://localhost:5173/` → **Create your account** (details above)
+1. `http://localhost:5173/` → **Create your account** → **Check your inbox**:
+   open the link from the backend terminal to confirm the email
 2. **Child profile configuration** → **Add Child**
    - Explorer flow: name `Alex`, age `8`
    - Creator flow: name `Maya`, age `14`

@@ -2,6 +2,8 @@ import express, { Router } from "express";
 import cookieParser from "cookie-parser";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 import { requestLogger } from "./middleware/requestLogger.js";
+import { config } from "./config.js";
+import { createAuthRouter } from "./routes/auth.js";
 import { healthRouter } from "./routes/health.js";
 
 export function createApp() {
@@ -9,19 +11,22 @@ export function createApp() {
 
   // Don't announce "X-Powered-By: Express" on every response; it only helps attackers.
   app.disable("x-powered-by");
+  // Behind AWS's load balancer, trust its "X-Forwarded-For" header for the caller's real IP.
+  app.set("trust proxy", config.trustProxyHops);
 
   // First, so every request gets an ID and a log line, even ones that fail later.
   app.use(requestLogger);
   // Parse JSON request bodies into req.body (rejects bodies over 100kb by default).
   app.use(express.json());
-  // Parse the Cookie header into req.cookies (the refresh token cookie arrives in BE-03).
+  // Parse the Cookie header into req.cookies (the refresh token cookie).
   app.use(cookieParser());
 
   // Everything lives under /api/v1. Each story in the guide adds its own router here
-  // (auth in BE-03, children in BE-04, stories in BE-08, ...).
+  // (children in BE-04, stories in BE-08, ...).
   const api = Router();
 
   api.use("/health", healthRouter);
+  api.use("/auth", createAuthRouter());
 
   app.use("/api/v1", api);
 

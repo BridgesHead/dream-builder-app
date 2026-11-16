@@ -13,6 +13,10 @@ export const ROUTES = {
   library: "/library",
   signup: "/signup",
   login: "/login",
+  // Opened from the links in emails, so they must match the backend's email links.
+  verifyEmail: "/verify-email",
+  forgotPassword: "/forgot-password",
+  resetPassword: "/reset-password",
   dashboard: "/parent/dashboard",
   children: "/parent/children",
   addChild: "/parent/children/new",

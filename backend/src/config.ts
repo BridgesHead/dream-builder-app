@@ -18,6 +18,20 @@ const envSchema = z.object({
   BUILD_VERSION: z.string().min(1).optional(),
   // How chatty the logs are. "debug" shows more, "warn" shows only problems.
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
+  // The secret that signs access tokens. Anyone who knows it can make tokens, so it lives
+  // only in .env (your PC) or the AWS secret store, never in the repo. At least 32 characters.
+  JWT_ACCESS_SECRET: z
+    .string()
+    .min(32, "must be at least 32 characters")
+    .refine((v) => !v.startsWith("replace-me"), "still the placeholder from .env.example: make your own secret"),
+  // The frontend's address. Links in emails point here, e.g. <APP_URL>/verify-email?token=...
+  APP_URL: z.url().default("http://localhost:5173"),
+  // Which version of the consent text parents agree to. Change it when the text changes;
+  // every new consent then records the new version (old records stay as they were).
+  CONSENT_TEXT_VERSION: z.string().min(1).max(50).default("2026-11-v1"),
+  // How many proxies sit in front of the API (AWS load balancer = 1). Needed so req.ip is the
+  // parent's real IP address (for consent records and rate limits), not the proxy's. 0 on your PC.
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).default(0),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -36,4 +50,8 @@ export const config = {
   // Which build is running: the deploy's version if set, otherwise package.json's.
   version: parsed.data.BUILD_VERSION ?? packageJson.version,
   logLevel: parsed.data.LOG_LEVEL,
+  jwtAccessSecret: parsed.data.JWT_ACCESS_SECRET,
+  appUrl: parsed.data.APP_URL.replace(/\/$/, ""),
+  consentTextVersion: parsed.data.CONSENT_TEXT_VERSION,
+  trustProxyHops: parsed.data.TRUST_PROXY_HOPS,
 };

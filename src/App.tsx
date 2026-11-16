@@ -3,7 +3,7 @@ import { Link, Redirect, Route, Switch, useLocation } from "wouter";
 import { AppStateProvider, useAppState } from "@/state/AppState";
 import { redirectFor } from "@/lib/flow";
 import { ROUTES } from "@/lib/routes";
-import { LoginScreen, SignupScreen } from "@/screens/parent/Auth";
+import { ForgotPasswordScreen, LoginScreen, ResetPasswordScreen, SignupScreen, VerifyEmailScreen } from "@/screens/parent/Auth";
 import { AddChildScreen, ChildrenScreen, HandoverScreen } from "@/screens/parent/Children";
 import { DashboardScreen } from "@/screens/parent/Dashboard";
 import { ReviewScreen } from "@/screens/parent/Review";
@@ -90,6 +90,9 @@ export function App() {
         <Route path={ROUTES.library} component={LibraryScreen} />
         <Route path={ROUTES.signup} component={SignupScreen} />
         <Route path={ROUTES.login} component={LoginScreen} />
+        <Route path={ROUTES.verifyEmail} component={VerifyEmailScreen} />
+        <Route path={ROUTES.forgotPassword} component={ForgotPasswordScreen} />
+        <Route path={ROUTES.resetPassword} component={ResetPasswordScreen} />
         <Route path={ROUTES.dashboard} component={DashboardScreen} />
         <Route path={ROUTES.children} component={ChildrenScreen} />
         <Route path={ROUTES.addChild} component={AddChildScreen} />

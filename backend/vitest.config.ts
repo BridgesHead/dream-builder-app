@@ -10,6 +10,9 @@ export default defineConfig({
       // A SEPARATE database just for tests, so tests can never wipe your dev data.
       // CI sets MONGODB_URI itself (to its MongoDB container); otherwise use the local one.
       MONGODB_URI: process.env.MONGODB_URI ?? "mongodb://127.0.0.1:27017/dream_builder_test",
+      // A made-up key used only by tests. It protects nothing real.
+      JWT_ACCESS_SECRET: "test-only-key-that-protects-nothing-real-000000",
+      APP_URL: "http://localhost:5173",
     },
     // Test files share one MongoDB; run them one after another so they don't step on each other.
     fileParallelism: false,

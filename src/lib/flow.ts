@@ -54,6 +54,10 @@ export function storyFlow(story: StoryState, mode: Mode): FlowStep[] {
  * Enforces: account → child profile → story steps in order → parent checkout.
  */
 export function redirectFor(path: string, story: StoryState, parent: ParentState, mode: Mode): string | null {
+  // Opened from email links: they work whether or not this browser is logged in.
+  const linkPages: string[] = [ROUTES.verifyEmail, ROUTES.forgotPassword, ROUTES.resetPassword];
+  if (linkPages.includes(path)) return null;
+
   const authPages: string[] = [ROUTES.signup, ROUTES.login];
   if (authPages.includes(path)) return parent.account ? ROUTES.dashboard : null;
   if (!parent.account) return ROUTES.signup;

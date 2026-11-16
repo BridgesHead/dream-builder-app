@@ -17,7 +17,7 @@ try {
   const result = await seedDatabase();
   logger.info(
     { parent: SEED_PARENT.email, children: ["Alex (8, junior)", "Maya (14, senior)"], stories: result.storyIds.length },
-    `Seeded. Log in as ${SEED_PARENT.email} / ${SEED_PARENT.password} once BE-03 is built`,
+    `Seeded. Log in as ${SEED_PARENT.email} / ${SEED_PARENT.password}`,
   );
 } finally {
   await disconnectFromDatabase();

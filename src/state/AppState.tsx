@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { HEROES, PRONOUNS, type ArtStyle, type HeroType, type PlanId, type Pronoun } from "@/data/content";
+import { restoreSession } from "@/lib/auth";
 
 // Frontend-only state. Field names follow StoryState in the PRD (§5) so the
 // shape can be sent to the API unchanged once a backend exists.
@@ -84,7 +85,8 @@ export interface Order {
 }
 
 export interface ParentState {
-  account: { name: string; email: string } | null;
+  /** The logged-in parent, as the API last described them. emailVerified is missing for demo data. */
+  account: { name: string; email: string; emailVerified?: boolean } | null;
   children: ChildProfile[];
   activeChildId: string | null;
   order: Order | null;
@@ -109,6 +111,15 @@ function save(key: string, value: unknown) {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {
     // Storage unavailable (private mode etc.) — state stays in memory.
+  }
+}
+
+// The /screens preview tool fills in demo data with no real login; don't undo it.
+function inPreviewMode(): boolean {
+  try {
+    return sessionStorage.getItem("dreamBuilder.preview") === "1";
+  } catch {
+    return false;
   }
 }
 
@@ -139,6 +150,25 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => save(STORY_KEY, story), [story]);
   useEffect(() => save(PARENT_KEY, parent), [parent]);
+
+  // When the app opens, ask the API whether the parent is still logged in (refresh cookie).
+  // The account saved in localStorage is only a cache: the server decides.
+  useEffect(() => {
+    let cancelled = false;
+    void restoreSession().then((result) => {
+      if (cancelled || result === "offline" || inPreviewMode()) return; // server unreachable: keep things as they are
+      setParent((p) =>
+        result
+          ? { ...p, account: { name: result.name, email: result.email, emailVerified: result.emailVerified } }
+          : p.account
+            ? { ...p, account: null, activeChildId: null, order: null }
+            : p,
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const value = useMemo<AppStateValue>(() => {
     const activeChild = parent.children.find((c) => c.id === parent.activeChildId) ?? null;

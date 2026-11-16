@@ -9,17 +9,27 @@
 // `code` is for the frontend's code (it never changes, so it's safe to check in an if).
 // `message` is for humans (we may reword it any time).
 
-// Every code the API can send. Later stories add theirs here
-// (e.g. BE-03 adds EMAIL_TAKEN, WRONG_PASSWORD, WEAK_PASSWORD, SESSION_EXPIRED).
+// Every code the API can send. Later stories add theirs here.
 export type ErrorCode =
   | "VALIDATION_FAILED"
   | "INVALID_JSON"
   | "BODY_TOO_LARGE"
-  | "UNAUTHENTICATED"
+  | "UNAUTHENTICATED" // no token, or a token we don't recognise
+  | "SESSION_EXPIRED" // the token was real but is too old: refresh or log in again
   | "FORBIDDEN"
   | "NOT_FOUND"
   | "CONFLICT"
   | "INVALID_STATUS_CHANGE"
+  // BE-03 accounts
+  | "INVALID_CREDENTIALS" // wrong password or unknown email (same answer for both)
+  | "EMAIL_TAKEN"
+  | "WEAK_PASSWORD"
+  | "CONSENT_REQUIRED"
+  | "EMAIL_NOT_VERIFIED"
+  | "LINK_INVALID" // a verify/reset link we never made
+  | "LINK_USED" // a verify/reset link that already worked once
+  | "LINK_EXPIRED" // a verify/reset link older than 24 hours
+  | "TOO_MANY_ATTEMPTS"
   | "INTERNAL_ERROR";
 
 export type FieldErrors = Record<string, string[] | undefined>;

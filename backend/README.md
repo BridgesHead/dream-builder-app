@@ -54,6 +54,10 @@ Settings come from environment variables. On your PC they live in `.env`, which 
 | `NODE_ENV` | no | `development` | `development`, `test` or `production`. In `development` the logs are coloured; otherwise they are JSON lines. |
 | `LOG_LEVEL` | no | `info` | `fatal`, `error`, `warn`, `info`, `debug` or `trace`. |
 | `BUILD_VERSION` | no | `version` in `package.json` | Set by the deploy step (e.g. the git commit), shown by `/health`. |
+| `JWT_ACCESS_SECRET` | yes | none | Signs access tokens. At least 32 random characters; the `.env.example` placeholder is refused. Secret: `.env` or the AWS secret store only. |
+| `APP_URL` | no | `http://localhost:5173` | The frontend address used in email links (`/verify-email?token=…`, `/reset-password?token=…`). |
+| `CONSENT_TEXT_VERSION` | no | `2026-11-v1` | Version of the consent text, saved on every consent record. |
+| `TRUST_PROXY_HOPS` | no | `0` | Proxies in front of the API (1 behind the AWS load balancer), so `req.ip` is the parent's real IP. |
 
 The API checks these at startup and stops with a clear message if one is missing or wrong.
 
@@ -91,6 +95,45 @@ tests/integration/    integration tests
 legacy/               old PGlite/Drizzle code, kept only as a reference while stories are rebuilt; not run or checked
 docs/                 the backend guide and notes
 ```
+
+## Accounts (BE-03)
+
+All under `/api/v1/auth`:
+
+| Route | What it does |
+|---|---|
+| `POST /register` | `{ name, email, password, adultConfirmed, consent }` → creates the parent and the consent record, emails a verification link, logs them in |
+| `POST /verify-email` | `{ token }` from the email link. Works once, for 24 hours. |
+| `POST /resend-verification` | Logged in. Sends a new verification link; older links stop working. |
+| `POST /login` | `{ email, password, remember? }` |
+| `POST /refresh` | Uses the refresh cookie to get a new access token |
+| `POST /logout` | Ends this device's session |
+| `POST /forgot-password` | `{ email }`. The same answer whether or not the email has an account. |
+| `POST /reset-password` | `{ token, password }`. Logs out every device. |
+| `GET /me` | The logged-in parent |
+
+Login, register and refresh return `{ user, accessToken, expiresIn }`. Send the access token as
+`Authorization: Bearer <accessToken>`; it lasts 15 minutes. The refresh token is only ever in the
+`db_refresh` cookie (httpOnly, SameSite=Strict, Secure outside development, path `/api/v1/auth`).
+
+**Emails on your PC** are not really sent: the dev mailer prints them in the terminal running
+`pnpm dev`. Copy the link from there.
+
+Error codes: `INVALID_CREDENTIALS`, `EMAIL_TAKEN`, `WEAK_PASSWORD`, `SESSION_EXPIRED`, `UNAUTHENTICATED`,
+`CONSENT_REQUIRED`, `EMAIL_NOT_VERIFIED`, `LINK_INVALID`, `LINK_USED`, `LINK_EXPIRED`, `TOO_MANY_ATTEMPTS`.
+
+Rate limits: 10 failed logins per email in 15 minutes; 5 sign-ups, and 5 forgot-password or resend
+emails, per IP address per hour.
+
+## Known gaps
+
+| Gap | Story | Notes |
+|---|---|---|
+| Google and Apple sign-in | BE-03 | Left for later (Sami Bhai's decision to make). Apple also waits for Dina's Apple developer account. |
+| Real email sending | AWS-01 | Until Sami Bhai sets up email from Dina's domain, production only logs "email NOT sent". |
+| Rate-limit counts are in memory | BE-07 | Each server counts on its own and a restart resets them. Move them to Redis when BE-07 adds it. |
+| Refresh-token rotation | BE-23 | The guide schedules rotation for BE-23. |
+| A failed generation has no way back from `generating` | BE-10 | Open question for Sami Bhai (see `docs/data-model.md`). |
 
 ## Errors
 

@@ -3,6 +3,7 @@ import { Link, useLocation } from "wouter";
 import { Sparkles, Wand2 } from "lucide-react";
 import { CHAPTERS } from "@/data/content";
 import { EMPTY_STORY, useAppState } from "@/state/AppState";
+import { logout } from "@/lib/auth";
 import { ROUTES } from "@/lib/routes";
 import { cx } from "@/lib/text";
 import { ChapterPill, Progress } from "./ui";
@@ -78,9 +79,14 @@ function ParentMenu() {
         type="button"
         className="rounded-lg border border-ink/15 bg-white px-3 py-1.5 font-bold text-ink hover:bg-tile"
         onClick={() => {
-          updateParent({ account: null, activeChildId: null, order: null });
-          updateStory(EMPTY_STORY);
-          navigate(ROUTES.login);
+          // Ends the session on the server too (the refresh cookie stops working).
+          void logout()
+            .catch(() => undefined)
+            .finally(() => {
+              updateParent({ account: null, activeChildId: null, order: null });
+              updateStory(EMPTY_STORY);
+              navigate(ROUTES.login);
+            });
         }}
       >
         Sign out

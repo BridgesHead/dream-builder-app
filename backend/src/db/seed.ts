@@ -1,4 +1,4 @@
-import argon2 from "argon2";
+import { hashPassword } from "../lib/password.js";
 import mongoose from "mongoose";
 import { ALL_MODELS, Child, Consent, Story, User } from "./models/index.js";
 import type { StoryFields } from "./models/story.js";
@@ -57,7 +57,7 @@ export async function seedDatabase(): Promise<SeedResult> {
   const parent = await User.create({
     name: SEED_PARENT.name,
     email: SEED_PARENT.email,
-    passwordHash: await argon2.hash(SEED_PARENT.password),
+    passwordHash: await hashPassword(SEED_PARENT.password),
     role: "parent",
     emailVerifiedAt: new Date(),
   });
