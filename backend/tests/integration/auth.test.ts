@@ -11,7 +11,7 @@ import { ALL_MODELS, Consent, EmailLink, Session, User } from "../../src/db/mode
 import { logger } from "../../src/lib/logger.js";
 import { hashToken } from "../../src/lib/randomToken.js";
 import { errorHandler } from "../../src/middleware/errorHandler.js";
-import { requireVerifiedParent } from "../../src/middleware/requireAuth.js";
+import { allow } from "../../src/middleware/access.js";
 import { createAccessToken } from "../../src/services/accessTokens.js";
 import { outbox } from "../../src/services/email.js";
 
@@ -283,7 +283,7 @@ describe("forgot and reset password", () => {
 describe("a parent can't create child profiles until email is verified AND consent is recorded", () => {
   // A tiny app with one route behind the same guard BE-04's "create child" route will use.
   const guarded = express();
-  guarded.get("/create-child", requireVerifiedParent, (_req: express.Request, res: express.Response) => {
+  guarded.get("/create-child", allow("verified_parent"), (_req: express.Request, res: express.Response) => {
     res.json({ ok: true });
     return;
   });

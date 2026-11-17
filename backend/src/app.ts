@@ -3,7 +3,11 @@ import cookieParser from "cookie-parser";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 import { requestLogger } from "./middleware/requestLogger.js";
 import { config } from "./config.js";
+import { createAdminRouter } from "./routes/admin.js";
 import { createAuthRouter } from "./routes/auth.js";
+import { createChildSessionRouter } from "./routes/childSession.js";
+import { createChildrenRouter } from "./routes/children.js";
+import { createFacilitatorRouter } from "./routes/facilitator.js";
 import { healthRouter } from "./routes/health.js";
 
 export function createApp() {
@@ -21,12 +25,18 @@ export function createApp() {
   // Parse the Cookie header into req.cookies (the refresh token cookie).
   app.use(cookieParser());
 
-  // Everything lives under /api/v1. Each story in the guide adds its own router here
-  // (children in BE-04, stories in BE-08, ...).
+  // Everything lives under /api/v1. Every route starts with allow(...) (BE-05), which says who may call it.
+  // Each story in the guide adds its own router here
+  // (stories in BE-08, payments in BE-17, ...).
   const api = Router();
 
   api.use("/health", healthRouter);
+  // Before /auth, so /auth/child-session/... is handled by its own router.
+  api.use("/auth/child-session", createChildSessionRouter());
   api.use("/auth", createAuthRouter());
+  api.use("/children", createChildrenRouter());
+  api.use("/facilitator", createFacilitatorRouter());
+  api.use("/admin", createAdminRouter());
 
   app.use("/api/v1", api);
 

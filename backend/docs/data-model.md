@@ -31,7 +31,8 @@ A story's parent is found through its child (`story.childId` → `child.parentId
 | `comments` | Parent comments and change requests, kept apart from the child's text | `storyId`, `panelNumber` (null = whole story), `authorId`, `type` (`comment` / `change_request`), `text` | `storyId` |
 | `jobs` | Background work | `storyId`, `type` (`story_text`, `panel_image`, `comic_script`, `comic_cell_image`, `title`, `panel_redraw`), `status`, `panelNumber`, `cellNumber`, `provider`, `aiModel`, `durationMs`, `attempts`, `error`, `violations[]` | `storyId` + `createdAt` |
 | `auditLogs` | Security diary. **Append-only.** No story text or secrets | `actorId`, `actorRole`, `action`, `targetType`, `targetId`, `ipAddress`, `createdAt` | `targetType` + `targetId` + `createdAt`, `actorId` + `createdAt` |
-| `sessions` (BE-03) | One login on one device: the server side of a refresh token | `userId`, `tokenHash` (SHA-256 of the cookie's token, never the token), `expiresAt` (30 days with "remember me", else 1 day), `remember` | `userId`, `tokenHash` unique, `expiresAt` TTL (MongoDB deletes expired sessions) |
+| `sessions` (BE-03) | One login on one device: the server side of a refresh token | `userId`, `tokenHash` (SHA-256 of the cookie's token, never the token), `expiresAt` (30 days with "remember me", else 1 day), `remember`, `childId` (BE-04: set = a child session, 12 hours at most) | `userId`, `tokenHash` unique, `expiresAt` TTL (MongoDB deletes expired sessions), `childId` |
+| `facilitatorLinks` (BE-05) | "This facilitator may read this child's stories." Made only by `pnpm users link` | `facilitatorId`, `childId`, `createdAt` | `facilitatorId` + `childId` unique, `childId` |
 | `emailLinks` (BE-03) | Single-use links sent by email | `userId`, `purpose` (`verify_email` / `reset_password`), `tokenHash`, `expiresAt` (24 hours), `usedAt` | `userId`, `tokenHash` unique, `expiresAt` TTL (deleted 7 days after expiry) |
 
 ### Inside a story

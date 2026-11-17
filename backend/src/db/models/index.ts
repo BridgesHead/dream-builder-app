@@ -9,17 +9,20 @@ export { Job, JOB_TYPES, type JobType } from "./job.js";
 export { AuditLog, ACTOR_ROLES } from "./auditLog.js";
 export { Session } from "./session.js";
 export { EmailLink, EMAIL_LINK_PURPOSES, type EmailLinkPurpose } from "./emailLink.js";
+export { FacilitatorLink } from "./facilitatorLink.js";
 
 import { AuditLog } from "./auditLog.js";
 import { Child } from "./child.js";
 import { Comment } from "./comment.js";
 import { Consent } from "./consent.js";
 import { EmailLink } from "./emailLink.js";
+import { FacilitatorLink } from "./facilitatorLink.js";
 import { Job } from "./job.js";
 import { Session } from "./session.js";
 import { Story } from "./story.js";
 import { User } from "./user.js";
 
-// Every collection: the seven from guide BE-02, plus sessions and emailLinks (BE-03).
+// Every collection: the seven from guide BE-02, plus sessions and emailLinks (BE-03)
+// and facilitatorLinks (BE-05).
 // Used e.g. for building every index at once.
-export const ALL_MODELS = [User, Consent, Child, Story, Comment, Job, AuditLog, Session, EmailLink];
+export const ALL_MODELS = [User, Consent, Child, Story, Comment, Job, AuditLog, Session, EmailLink, FacilitatorLink];

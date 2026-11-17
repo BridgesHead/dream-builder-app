@@ -13,6 +13,10 @@ const sessionSchema = new Schema(
     expiresAt: { type: Date, required: true },
     // "Remember me" was ticked: the cookie survives closing the browser.
     remember: { type: Boolean, required: true },
+    // Set = this is a CHILD session (BE-04): the parent handed the device to this child.
+    // null = a normal parent session.
+    // index: removing a child ends all of that child's sessions.
+    childId: { type: Schema.Types.ObjectId, ref: "Child", default: null, index: true },
   },
   baseSchemaOptions,
 );

@@ -2,6 +2,7 @@ import { config } from "../config.js";
 import { Consent, User } from "../db/models/index.js";
 import { AppError } from "../lib/errors.js";
 import { DUMMY_PASSWORD_HASH, hashPassword, passwordProblems, verifyPassword } from "../lib/password.js";
+import { writeAudit } from "./audit.js";
 import { passwordResetEmail, sendEmail, verificationEmail } from "./email.js";
 import { createEmailLink, useEmailLink } from "./emailLinks.js";
 import { endAllSessions } from "./sessions.js";
@@ -56,8 +57,9 @@ export async function register(input: RegisterInput, ipAddress: string): Promise
   }
 
   // The consent record: who, when (createdAt), IP address, text version and method.
+  let consent;
   try {
-    await Consent.create({
+    consent = await Consent.create({
       parentId: user._id,
       textVersion: config.consentTextVersion,
       method: "email_verification",
@@ -69,6 +71,9 @@ export async function register(input: RegisterInput, ipAddress: string): Promise
     throw err;
   }
 
+  // BE-05: one audit entry for the consent (register is a sign-up, not a sign-in).
+  await writeAudit({ actorId: String(user._id), actorRole: "parent", action: "consent.record", targetType: "consent", targetId: String(consent._id), ipAddress });
+
   const token = await createEmailLink(user._id, "verify_email");
   await sendEmail(verificationEmail(user.email, user.name, token));
 
@@ -77,10 +82,12 @@ export async function register(input: RegisterInput, ipAddress: string): Promise
 
 // Checks email + password. Wrong password and unknown email get the SAME answer, and take
 // the same time, so this can't be used to find out who has an account.
-export async function login(email: string, password: string): Promise<PublicUser> {
+export async function login(email: string, password: string, ipAddress?: string): Promise<PublicUser> {
   const user = await User.findOne({ email }).select("+passwordHash");
   const ok = await verifyPassword(user?.passwordHash ?? DUMMY_PASSWORD_HASH, password);
   if (!user || !ok) throw new AppError(401, "INVALID_CREDENTIALS", "The email or password is not right");
+  // BE-05: every successful sign-in, by any role.
+  await writeAudit({ actorId: String(user._id), actorRole: user.role, action: "auth.sign_in", targetType: "user", targetId: String(user._id), ipAddress });
   return toPublicUser(user);
 }
 

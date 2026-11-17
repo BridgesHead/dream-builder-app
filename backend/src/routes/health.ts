@@ -1,13 +1,14 @@
 import { Router } from "express";
 import { config } from "../config.js";
 import { getDatabaseStatus } from "../db/connect.js";
+import { allow } from "../middleware/access.js";
 
 export const healthRouter = Router();
 
 // GET /api/v1/health: "Are you alive, and can you reach the database?"
 // Used by us, by the AWS uptime checks (AWS-02) and by the load balancer.
 // It needs no login and shows no secrets, only the version and the database status.
-healthRouter.get("/", (_req, res) => {
+healthRouter.get("/", allow("public"), (_req, res) => {
   const database = getDatabaseStatus();
   const healthy = database === "connected";
 

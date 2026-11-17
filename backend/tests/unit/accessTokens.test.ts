@@ -1,6 +1,6 @@
 import { SignJWT } from "jose";
 import { describe, expect, it } from "vitest";
-import { checkAccessToken, createAccessToken } from "../../src/services/accessTokens.js";
+import { checkAccessToken, createAccessToken, createChildAccessToken } from "../../src/services/accessTokens.js";
 
 const userId = "665f1c2ab0d4e1a2b3c4d5e6";
 const realKey = new TextEncoder().encode(process.env.JWT_ACCESS_SECRET);
@@ -20,7 +20,25 @@ function handMade(key: Uint8Array, expiresAt: number) {
 describe("access tokens", () => {
   it("a fresh token checks out and carries the user id", async () => {
     const token = await createAccessToken(userId, "parent");
-    expect(await checkAccessToken(token)).toEqual({ ok: true, userId });
+    expect(await checkAccessToken(token)).toEqual({ ok: true, userId, role: "parent" });
+  });
+
+  it("a child session token carries the role, the child and its session (BE-04)", async () => {
+    const childId = "665f1c2ab0d4e1a2b3c4d5e7";
+    const sessionId = "665f1c2ab0d4e1a2b3c4d5e8";
+    const token = await createChildAccessToken(userId, childId, sessionId);
+    expect(await checkAccessToken(token)).toEqual({ ok: true, userId, role: "child_session", childId, sessionId });
+  });
+
+  it("a child session token without its child or session is 'invalid'", async () => {
+    const token = await new SignJWT({ role: "child_session" })
+      .setProtectedHeader({ alg: "HS256" })
+      .setSubject(userId)
+      .setIssuer("dream-builder-api")
+      .setAudience("dream-builder")
+      .setExpirationTime("10m")
+      .sign(realKey);
+    expect(await checkAccessToken(token)).toEqual({ ok: false, reason: "invalid" });
   });
 
   it("an expired token is 'expired'", async () => {

@@ -49,6 +49,18 @@ export function createAuthRateLimits() {
       handler: tooMany("Too many sign-ups from this network. Please try again later."),
     }),
 
+    // Leaving a child session (BE-04): 10 WRONG parent passwords in 15 minutes per parent,
+    // so a child can't keep guessing. Runs after allow("child_session"), which sets req.childSession.
+    childExit: rateLimit({
+      windowMs: 15 * MINUTE,
+      limit: 10,
+      skipSuccessfulRequests: true,
+      keyGenerator: (req) => `child-exit:${req.childSession?.parentId ?? ipKey(req)}`,
+      standardHeaders: "draft-8",
+      legacyHeaders: false,
+      handler: tooMany("Too many wrong passwords. Please wait 15 minutes and try again."),
+    }),
+
     // 5 "send me an email" requests (forgot password, resend verification) per hour per IP.
     email: rateLimit({
       windowMs: 60 * MINUTE,

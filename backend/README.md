@@ -112,7 +112,7 @@ All under `/api/v1/auth`:
 | `POST /reset-password` | `{ token, password }`. Logs out every device. |
 | `GET /me` | The logged-in parent |
 
-Login, register and refresh return `{ user, accessToken, expiresIn }`. Send the access token as
+Login, register and refresh return `{ kind: "parent", user, accessToken, expiresIn }` (refresh in a child session returns `kind: "child"`, see below). Send the access token as
 `Authorization: Bearer <accessToken>`; it lasts 15 minutes. The refresh token is only ever in the
 `db_refresh` cookie (httpOnly, SameSite=Strict, Secure outside development, path `/api/v1/auth`).
 
@@ -125,6 +125,74 @@ Error codes: `INVALID_CREDENTIALS`, `EMAIL_TAKEN`, `WEAK_PASSWORD`, `SESSION_EXP
 Rate limits: 10 failed logins per email in 15 minutes; 5 sign-ups, and 5 forgot-password or resend
 emails, per IP address per hour.
 
+## Child profiles and child sessions (BE-04)
+
+Child profiles, under `/api/v1/children`. Parent only, with a verified email and recorded consent:
+
+| Route | What it does |
+|---|---|
+| `GET /` | My children (removed ones are hidden) |
+| `POST /` | `{ name, age, language, mode? }` → 201. Age 8–14. No `mode`: under 12 is `junior` (Explorer), 12+ is `senior` (Creator). |
+| `GET /:id` | One child |
+| `PATCH /:id` | Any of `name`, `age`, `language`, `mode`. A new age keeps the stored mode. |
+| `DELETE /:id` | Soft delete (`deletedAt` set, audit entry written) and ends that child's sessions. Full deletion comes with BE-16. |
+
+Someone else's child, a removed child and a bad id all return 404. Each create, edit and remove is
+written to `auditLogs`.
+
+Child sessions, under `/api/v1/auth/child-session` (under `/auth` because they swap the refresh cookie):
+
+| Route | What it does |
+|---|---|
+| `POST /` | Parent token, `{ childId }` → 201 `{ kind: "child", child, accessToken, expiresIn }`. The parent's session on this device ends; a child session starts (browser-session cookie, 12 hours at most). |
+| `POST /exit` | Child token, `{ password }` (the parent's) → `{ kind: "parent", user, accessToken, expiresIn }` and a fresh parent session. 10 wrong passwords per parent in 15 minutes → 429. |
+
+A child token (`role: "child_session"`) is refused (403) by every parent route. Story routes (BE-08) will
+use `allow("child_session")` plus `assertOwnChild` so a child reaches only their own stories.
+Removing the child or exiting stops the child token at once, not 15 minutes later.
+
+## Roles, access rules and audit log (BE-05)
+
+Every route starts with one `allow(...)` (`src/middleware/access.ts`) naming who may call it:
+`public`, `parent` (verified or not), `verified_parent`, `child_session`, `facilitator`, `admin`.
+Not logged in → 401; logged in as the wrong kind → 403. `tests/integration/accessMatrix.test.ts`
+calls every route as every kind of caller, and fails if a route has no `allow(...)` or isn't in
+its matrix. **Adding a route? Add it to that matrix.**
+
+Facilitator (read only), under `/api/v1/facilitator`:
+
+| Route | What it does |
+|---|---|
+| `GET /children` | Children linked to me |
+| `GET /children/:childId/stories` | That child's story history (no story text) |
+| `GET /stories/:storyId` | Open one story (audit `story.view`) |
+
+Admin, under `/api/v1/admin`:
+
+| Route | What it does |
+|---|---|
+| `GET /audit-log` | Read the audit log, newest first. Filters: `actorId`, `targetType`, `targetId`, `action`; pages: `limit` (max 200), `before=<entry id>` |
+| `GET /stories/:storyId` | Open any story (audit `story.view`) |
+
+No route changes or deletes an audit entry, and the model refuses it too.
+
+Staff accounts and facilitator links are made only with the script, never through sign-up:
+
+```bash
+pnpm users create   --role admin --email ali@example.com --name "Ali Khan"
+pnpm users create   --role facilitator --email teacher@example.com --name "Ms Noor"
+pnpm users set-role --email someone@example.com --role facilitator   # logs them out everywhere
+pnpm users link     --facilitator teacher@example.com --child <child id>
+pnpm users unlink   --facilitator teacher@example.com --child <child id>
+```
+
+A new account gets a "set your password" email (printed in the terminal on your PC).
+
+Audit actions: `auth.sign_in`, `consent.record`, `child.create`, `child.update`, `child.delete`,
+`child_session.start`, `child_session.exit`, `story.view`, `story.approve` (route in BE-12),
+`user.create`, `user.role_change`, `facilitator.link`, `facilitator.unlink`. Each holds who, what,
+which record, when and from where; never story text or secrets.
+
 ## Known gaps
 
 | Gap | Story | Notes |
@@ -132,6 +200,11 @@ emails, per IP address per hour.
 | Google and Apple sign-in | BE-03 | Left for later (Sami Bhai's decision to make). Apple also waits for Dina's Apple developer account. |
 | Real email sending | AWS-01 | Until Sami Bhai sets up email from Dina's domain, production only logs "email NOT sent". |
 | Rate-limit counts are in memory | BE-07 | Each server counts on its own and a restart resets them. Move them to Redis when BE-07 adds it. |
+| Child-session guard not on story routes yet | BE-08 | Story routes don't exist yet; the guard is built and tested with a test-only route. |
+| A parent token stays valid up to 15 minutes after handover | BE-23 | It lives only in the page's memory and the frontend drops it at handover. |
+| Facilitator portal screen (FE-14) | FE-14 | The API is ready; the frontend has no portal screen yet. |
+| Story edit, redraw and approve routes in the access matrix | BE-08, BE-11, BE-12 | Facilitators must get 403 on them; add each to the matrix when built. |
+| Admin second factor (MFA) | Later story in the guide | Admin login is password only for now. |
 | Refresh-token rotation | BE-23 | The guide schedules rotation for BE-23. |
 | A failed generation has no way back from `generating` | BE-10 | Open question for Sami Bhai (see `docs/data-model.md`). |
 
