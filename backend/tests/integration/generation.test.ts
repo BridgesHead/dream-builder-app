@@ -195,8 +195,63 @@ describe(`generation (${queueKind()} queue)`, () => {
     expect(res.body.progress.panels).toHaveLength(12);
     expect(res.body.progress.jobs).toHaveLength(14);
     expect(res.body.progress.jobs[0]).toMatchObject({ provider: "stub", aiModel: "stub-v1", attempts: 1 });
-    expect(res.body.progress.violations).toEqual([]);
+    // The stub leaves out the closing line on purpose; the engine repairs it and logs it (BE-09).
+    expect(res.body.progress.violations).toEqual([
+      expect.objectContaining({ rule: "R9 Practice Anchor closure", panelNumber: 12, fixedBy: "repaired", jobType: "story_text" }),
+    ]);
     expect((await request(app).get(`/api/v1/admin/stories/665f1c2ab0d4e1a2b3c4d5e6/progress`).set(bearer(admin.token))).status).toBe(404);
+  });
+});
+
+describe("the story engine inside generation (BE-09)", () => {
+  it("every saved story passes the engine: closing line, Brave-Step phrase, the child's words", async () => {
+    const { child, id } = await completeDraft(true);
+    await generate(child, id);
+    await waitFor(async () => (await statusOf(id)) === "child_review");
+    const panels = (await Story.findById(id).lean())!.panels;
+    expect(panels[14].text.endsWith("One real step today.")).toBe(true);
+    expect(panels[13].text).toContain("Ember took her next brave step toward becoming the vet");
+    expect(panels[4].text).toContain('"I can start."');
+    expect(panels[11].text).toMatch(/"I keep going\."$/);
+  });
+
+  it("a skipped panel is rewritten, and the job records it (defect 5)", async () => {
+    stubControls.brokenPanel.set(6, 1); // the AI's first draft leaves out Panel 6
+    const { child, id } = await completeDraft();
+    await generate(child, id);
+    await waitFor(async () => (await statusOf(id)) === "child_review");
+    expect((await Story.findById(id).lean())!.panels[5].text).not.toBe("");
+    const job = (await Job.findOne({ storyId: id, type: "story_text" }).lean())!;
+    expect(job.attempts).toBe(1);
+    expect(job.violations).toEqual(expect.arrayContaining([expect.objectContaining({ rule: "Panel plan (D5)", panelNumber: 6, fixedBy: "rewritten" })]));
+  });
+
+  it("still broken after 2 rewrites: the try fails with the reason, and the next try starts fresh", async () => {
+    stubControls.brokenPanel.set(6, 3); // the first draft and both rewrites leave Panel 6 out
+    const { child, id } = await completeDraft();
+    await generate(child, id);
+    await waitFor(async () => (await statusOf(id)) === "child_review");
+    const job = (await Job.findOne({ storyId: id, type: "story_text" }).lean())!;
+    expect(job.attempts).toBe(2);
+  });
+
+  it("broken on every try: the job fails with the reason and the violations, shown to the admin", async () => {
+    stubControls.brokenPanel.set(6, 1000);
+    const { child, id } = await completeDraft();
+    await generate(child, id);
+    await waitFor(async () => (await Job.exists({ storyId: id, type: "story_text", status: "failed" })) !== null);
+    const job = (await Job.findOne({ storyId: id, type: "story_text" }).lean())!;
+    expect(job.error).toContain("Story rules still broken after 2 rewrites");
+    expect(job.violations).toEqual(expect.arrayContaining([expect.objectContaining({ panelNumber: 6, fixedBy: "failed" })]));
+
+    const admin = await makeUser("admin");
+    const progress = (await request(app).get(`/api/v1/admin/stories/${id}/progress`).set(bearer(admin.token))).body.progress;
+    expect(progress.violations).toEqual(expect.arrayContaining([expect.objectContaining({ panelNumber: 6, fixedBy: "failed" })]));
+    expect(progress.canRetry).toBe(true);
+
+    // Defect 3 fixed: the reason reaches the caller (Final Climb's status), not just the logs.
+    const shown = (await status(child, id)).body.status;
+    expect(shown.failed[0]).toMatchObject({ type: "story_text", error: expect.stringContaining("Panel 6") });
   });
 });
 

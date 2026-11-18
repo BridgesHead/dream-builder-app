@@ -13,12 +13,17 @@ export const JOB_TYPES = [
 ] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 
-// A story-rule problem the engine found and fixed (BE-09). Shown in Book Progress Detail.
+// A story-rule problem the engine found (BE-09). Shown in Book Progress Detail.
+//   repaired  = the engine fixed it itself
+//   rewritten = the AI rewrote the panel and it passed
+//   failed    = still broken after the rewrites (this try failed)
+export const VIOLATION_FIXES = ["repaired", "rewritten", "failed"] as const;
 const violationSchema = new Schema(
   {
     rule: { type: String, required: true, maxlength: 100 },
     message: { type: String, required: true, maxlength: 1000 },
     panelNumber: { type: Number, min: 1, max: 15, default: null },
+    fixedBy: { type: String, enum: VIOLATION_FIXES, required: true, default: "failed" },
   },
   subdocumentOptions,
 );

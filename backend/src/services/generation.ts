@@ -23,7 +23,7 @@ export async function ensureJob(storyId: string, type: JobType, panelNumber: num
   const job = await Job.findOneAndUpdate(
     { storyId, type, panelNumber, cellNumber: null },
     { $setOnInsert: { status: "queued" } },
-    { upsert: true, new: true },
+    { upsert: true, returnDocument: "after" },
   );
   if (job.status === "queued") await enqueueJob(String(job._id));
 }

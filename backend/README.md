@@ -4,6 +4,8 @@ The backend for Dream Builder, a storytelling app for children aged 8–14.
 Node.js 24 + TypeScript, Express 5, MongoDB (Mongoose) and Zod. Every route lives under `/api/v1`.
 
 The work is planned in [`docs/backend-guide.txt`](docs/backend-guide.txt) (stories BE-01 … BE-27).
+How stories are made, from the wizard to the finished panels, with every term explained:
+[`docs/story-system.md`](docs/story-system.md).
 
 ## Local setup
 
@@ -90,7 +92,8 @@ src/db/models/        Mongoose models: one file per collection (see docs/data-mo
 src/services/         real logic, e.g. storyLifecycle (allowed story status changes)
 scripts/              command-line scripts (pnpm seed, pnpm users)
 src/worker.ts         starts a queue worker (pnpm worker), apart from the API
-src/jobs/             the job queue (queue.ts), one job try (runJob.ts), the AI providers
+src/jobs/             the job queue (queue.ts), one job try (runJob.ts), the AI providers, story text (storyText.ts)
+src/engine/           the story rules engine (BE-09): plan, context, tables, rules, director; no HTTP or database
 src/routes/           one Router per area
 src/middleware/       validate, requestLogger, errorHandler
 src/lib/              logger, errors (the shared error shape)
@@ -259,12 +262,54 @@ Until BE-10 the AI is a **stub** (`AI_PROVIDER=stub`): placeholder text ("Panel 
 picture keys like `stub/<story id>/panel-03.webp`, after `STUB_DELAY_MS`. The rate-limit counts (BE-03) also
 live in Redis when `REDIS_URL` is set.
 
+## Story rules engine (BE-09)
+
+`src/engine/` checks every story the AI writes before it is saved. Plain functions: text in, text out.
+
+```
+AI draft (panels; Panels 5 and 9 as the eight beats)
+  → engine: repairs (fixed by code, logged)  +  checks (panels to rewrite)
+  → the AI rewrites only those panels, at most 2 rounds  (src/jobs/storyText.ts)
+  → still broken: the try fails with the reason, and the job queue retries
+```
+
+| Rule | Repaired by code | Sent back for a rewrite |
+|---|---|---|
+| R1 No clinical labels | known word → poetic name ("anxiety" → "the Humming Mist") | words with no safe swap |
+| R2 Dream world | | key panels (3, 11, 14) without dream-world words (only when the dream matches the table) |
+| R3 Earned, not magic | | "magic", "suddenly", "spell"… in triumph panels |
+| R4 Child's Act 3 words | added word for word, in quotes, at the end of Panel 12 | Panel 13 repeating them word for word |
+| R5 Inner voice | thoughts put in single quotes | |
+| R6 Character + D3 bleed-guard | | hero not named; tools missing; another hero's name, body signal or body part |
+| R7 One Brave Sentence | heroWords / heroWords2 added to the Try beat of Panels 5 / 9 | |
+| R8 Brave move parity | | a brave move copied from an earlier act |
+| R9 Practice Anchor | "One real step today." added | |
+| R10 Brave-Step Mandate | "took her/his next brave step toward becoming the [Core Noun]" added | |
+| 8-Beat Arc + D4 | | missing, empty or fused beats; the wrong body signal |
+| Partial Shift | | "shattered", "vanished", "dissolved", "fixed", "solved", "gone" in resolution beats |
+| D5 Panel plan | | a missing or empty panel (extra panels fail the try: never cut or padded) |
+| D6 Strategy label | "One Brave Sentence strategy" → "brave words" | |
+| D7 Pronoun case | "leaving she" → "leaving her" | |
+| D9 Vocabulary garble | | "world-future", "Singer" mid-sentence |
+| Two acts | | any third challenge |
+
+The child's own words (heroWords, heroWords2, heroWords3, thirdChallengeText) are never changed or judged.
+Every finding is saved on the `story_text` job as a violation (`repaired`, `rewritten` or `failed`) and
+shows in Book Progress Detail (`GET /admin/stories/:id/progress`).
+
+`src/engine/director.ts` builds the instructions for the AI from the same plan (used by BE-10).
+Tests: `tests/unit/engine/` on fixed samples in `tests/fixtures/engine/` (no AI calls).
+
 ## Known gaps
 
 | Gap | Story | Notes |
 |---|---|---|
 | Google and Apple sign-in | BE-03 | Left for later (Sami Bhai's decision to make). Apple also waits for Dina's Apple developer account. |
 | Real email sending | AWS-01 | Until Sami Bhai sets up email from Dina's domain, production only logs "email NOT sent". |
+| Two-act panel plan | BE-09 | Panels 1–10 + Grand Finale + Practice Anchor (pages 11–13 dropped). Decided by Anas; Sami Bhai to check it matches the prototype. |
+| Eight beats in Panels 5 and **9** | BE-09 | The guide says "5 and 8"; read as 9 (the second brave move). Waiting for Sami Bhai. |
+| Core Noun rule | BE-09 | "be a vet" → "vet"; an action uses the dream-world noun; otherwise "dreamer". Waiting for Sami Bhai. |
+| Engine word tables are starters | BE-09 | Clinical words and dream worlds in `src/engine/tables.ts`; swap in the prototype's tables when they arrive. |
 | The AI is a stub | BE-10 | Placeholder text and picture keys; BE-10 adds fal.ai (and BE-14 its anonymising gate). |
 | Comic jobs and picture redraw | BE-11, BE-12 | `comic_script`, `comic_cell_image` and `panel_redraw` jobs fail with "aren't built yet". A comic story gets storybook panels for now. |
 | Book Progress Detail screen | FE-15 | The admin API is ready; the frontend has no screen yet. |
