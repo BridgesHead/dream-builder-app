@@ -60,6 +60,10 @@ const MATRIX: Entry[] = [
   { method: "post", mount: "/stories", path: "/:id/generate", rule: ["child_session"], callers: ["child_session"] },
   { method: "post", mount: "/stories", path: "/:id/generate/retry", rule: ["child_session"], callers: ["child_session"] },
   { method: "get", mount: "/stories", path: "/:id/status", rule: ["child_session", "verified_parent"], callers: ["child_session", "parent"] },
+  { method: "get", mount: "/stories", path: "/:id/panels/:number/image", rule: ["child_session", "verified_parent"], callers: ["child_session", "parent"] },
+
+  // The signed link is the permission (an <img> tag can't send a token).
+  { method: "get", mount: "/media", path: "/*key", rule: ["public"], callers: EVERYONE },
 
   { method: "get", mount: "/facilitator", path: "/children", rule: ["facilitator"], callers: ["facilitator"] },
   { method: "get", mount: "/facilitator", path: "/children/:childId/stories", rule: ["facilitator"], callers: ["facilitator"] },

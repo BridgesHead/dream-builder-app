@@ -1,6 +1,7 @@
 import { isValidObjectId } from "mongoose";
 import { Child, Story } from "../db/models/index.js";
 import { AppError } from "../lib/errors.js";
+import { getStorage } from "../lib/storage.js";
 import type { StoryPatch } from "../types/story.js";
 import { adminProgress, beginGeneration, retryFailed, storyStatus } from "./generation.js";
 import { assertStatusChange } from "./storyLifecycle.js";
@@ -55,8 +56,23 @@ export async function listStories(actor: StoryActor, onlyChildId?: string) {
 }
 
 // GET /stories/:id: every field, so a reopened draft restores everything (defect 1).
+// Each panel with a picture also gets imageUrl: a short-lived signed link to it (BE-10).
 export async function getStory(actor: StoryActor, storyId: string) {
-  return (await findReachableStory(actor, storyId)).toJSON();
+  const story = (await findReachableStory(actor, storyId)).toJSON() as { panels: { imageKey?: string | null }[] };
+  const storage = getStorage();
+  story.panels = await Promise.all(
+    story.panels.map(async (p) => ({ ...p, imageUrl: p.imageKey ? (await storage.link(p.imageKey)).url : null })),
+  );
+  return story;
+}
+
+// GET /stories/:id/panels/:number/image: a fresh signed link to one panel picture (BE-10).
+// The story keeps only the key; the link stops working after IMAGE_URL_TTL_SECONDS.
+export async function panelImageLink(actor: StoryActor, storyId: string, panelNumber: string) {
+  const story = await findReachableStory(actor, storyId);
+  const panel = /^\d{1,2}$/.test(panelNumber) ? story.panels.find((p) => p.number === Number(panelNumber)) : undefined;
+  if (!panel?.imageKey) throw new AppError(404, "NOT_FOUND", "Picture not found");
+  return getStorage().link(panel.imageKey);
 }
 
 // PATCH /stories/:id: save one wizard step. Only the child, only while it's a draft.

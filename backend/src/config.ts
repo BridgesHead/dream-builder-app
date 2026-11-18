@@ -7,6 +7,9 @@ const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.me
   version: string;
 };
 
+// An empty value (FAL_KEY=) counts as not set.
+const unsetIfEmpty = <T extends z.ZodType>(schema: T) => z.preprocess((v) => (v === "" ? undefined : v), schema.optional());
+
 // Describe the environment variables we expect, with defaults for local dev.
 // z.coerce turns the string "3000" from .env into the number 3000.
 const envSchema = z.object({
@@ -37,8 +40,9 @@ const envSchema = z.object({
   // Where Redis lives, e.g. redis://127.0.0.1:6379. Set: BullMQ queue + separate workers
   // (pnpm worker). Not set: an in-memory queue inside the API, for your PC only.
   REDIS_URL: z.string().regex(/^rediss?:\/\//, "must start with redis:// or rediss://").optional(),
-  // Who makes the text and pictures. "stub" = fake placeholders until BE-10 adds fal.ai.
-  AI_PROVIDER: z.enum(["stub"]).default("stub"),
+  // Who makes the text and pictures: "fal" = the real AI (BE-10), "stub" = fake placeholders
+  // (tests, and your PC without a fal.ai key).
+  AI_PROVIDER: z.enum(["stub", "fal"]).default("stub"),
   // How long the fake AI takes per job, so progress is visible on Final Climb.
   STUB_DELAY_MS: z.coerce.number().int().min(0).default(400),
   // Jobs one worker runs at the same time.
@@ -52,10 +56,44 @@ const envSchema = z.object({
   // Time limits per job.
   TEXT_JOB_TIMEOUT_MS: z.coerce.number().int().min(100).default(60_000),
   IMAGE_JOB_TIMEOUT_MS: z.coerce.number().int().min(100).default(120_000),
-}).refine((env) => env.NODE_ENV !== "production" || !!env.REDIS_URL, {
-  path: ["REDIS_URL"],
-  message: "is required in production: workers must run apart from the API (BE-07)",
-});
+
+  // ---- fal.ai (BE-10) ----
+  // The secret key from fal.ai. Only in .env or the AWS secret store; never printed or logged.
+  FAL_KEY: unsetIfEmpty(z.string().min(10)),
+  // Where fal.ai lives. Tests point this at a fake fal.ai server on the PC.
+  FAL_BASE_URL: z.url().default("https://fal.run"),
+  // The text endpoint (guide: fal-ai/any-llm) and the model behind it. The PRD's
+  // Gemini Flash 1.5 is retired; Sami Bhai confirms the replacement (decision 1A).
+  FAL_TEXT_ENDPOINT: z.string().min(1).default("fal-ai/any-llm"),
+  FAL_TEXT_MODEL: z.string().min(1).default("google/gemini-2.5-flash"),
+  // The FLUX picture model (decision 2A).
+  FAL_IMAGE_MODEL: z.string().min(1).default("fal-ai/flux/dev"),
+  // One fal.ai call gives up after this long, so a stuck call can't hold a worker.
+  FAL_CALL_TIMEOUT_MS: z.coerce.number().int().min(100).default(50_000),
+
+  // ---- Picture storage (BE-10) ----
+  // The S3 bucket in the AWS UAE region. Set: pictures go to S3. Not set: a local folder
+  // (STORAGE_DIR), for your PC only. AWS credentials come from the server's IAM role.
+  S3_BUCKET: unsetIfEmpty(z.string().min(3)),
+  S3_REGION: z.string().min(1).default("me-central-1"),
+  STORAGE_DIR: z.string().min(1).default("data/storage"),
+  // How long a picture link given to the app keeps working.
+  IMAGE_URL_TTL_SECONDS: z.coerce.number().int().min(60).max(7 * 24 * 3600).default(3600),
+  // The API's own public address, for picture links to the local folder.
+  API_URL: z.url().default("http://localhost:3000"),
+})
+  .refine((env) => env.NODE_ENV !== "production" || !!env.REDIS_URL, {
+    path: ["REDIS_URL"],
+    message: "is required in production: workers must run apart from the API (BE-07)",
+  })
+  .refine((env) => env.NODE_ENV !== "production" || !!env.S3_BUCKET, {
+    path: ["S3_BUCKET"],
+    message: "is required in production: pictures live in the UAE bucket (BE-10)",
+  })
+  .refine((env) => env.AI_PROVIDER !== "fal" || !!env.FAL_KEY, {
+    path: ["FAL_KEY"],
+    message: 'is required when AI_PROVIDER is "fal"',
+  });
 
 const parsed = envSchema.safeParse(process.env);
 
@@ -80,6 +118,21 @@ export const config = {
   redisUrl: parsed.data.REDIS_URL ?? null,
   aiProvider: parsed.data.AI_PROVIDER,
   stubDelayMs: parsed.data.STUB_DELAY_MS,
+  fal: {
+    key: parsed.data.FAL_KEY ?? null,
+    baseUrl: parsed.data.FAL_BASE_URL.replace(/\/$/, ""),
+    textEndpoint: parsed.data.FAL_TEXT_ENDPOINT,
+    textModel: parsed.data.FAL_TEXT_MODEL,
+    imageModel: parsed.data.FAL_IMAGE_MODEL,
+    callTimeoutMs: parsed.data.FAL_CALL_TIMEOUT_MS,
+  },
+  storage: {
+    bucket: parsed.data.S3_BUCKET ?? null,
+    region: parsed.data.S3_REGION,
+    dir: parsed.data.STORAGE_DIR,
+    urlTtlSeconds: parsed.data.IMAGE_URL_TTL_SECONDS,
+    apiUrl: parsed.data.API_URL.replace(/\/$/, ""),
+  },
   queue: {
     concurrency: parsed.data.QUEUE_CONCURRENCY,
     aiCallsPerSecond: parsed.data.AI_CALLS_PER_SECOND,

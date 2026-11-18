@@ -63,6 +63,12 @@ Settings come from environment variables. On your PC they live in `.env`, which 
 | `APP_URL` | no | `http://localhost:5173` | The frontend address used in email links (`/verify-email?token=…`, `/reset-password?token=…`). |
 | `CONSENT_TEXT_VERSION` | no | `2026-11-v1` | Version of the consent text, saved on every consent record. |
 | `TRUST_PROXY_HOPS` | no | `0` | Proxies in front of the API (1 behind the AWS load balancer), so `req.ip` is the parent's real IP. |
+| `AI_PROVIDER` | no | `stub` | `fal` = the real AI (BE-10), `stub` = fake text and placeholder pictures. |
+| `FAL_KEY` | with `fal` | none | The fal.ai key. Secret: `.env` or the AWS secret store only. |
+| `FAL_TEXT_MODEL` / `FAL_IMAGE_MODEL` | no | `google/gemini-2.5-flash` / `fal-ai/flux/dev` | The text model (behind `fal-ai/any-llm`) and the FLUX model. Sami Bhai confirms the text model. |
+| `S3_BUCKET` | in production | none | The picture bucket in the AWS UAE region (`S3_REGION`, default `me-central-1`). Not set: pictures go to `STORAGE_DIR` (`data/storage`). |
+| `IMAGE_URL_TTL_SECONDS` | no | `3600` | How long a picture link given to the app keeps working. |
+| `API_URL` | no | `http://localhost:3000` | The API's own address, for links to pictures in the local folder. |
 
 The API checks these at startup and stops with a clear message if one is missing or wrong.
 
@@ -92,7 +98,8 @@ src/db/models/        Mongoose models: one file per collection (see docs/data-mo
 src/services/         real logic, e.g. storyLifecycle (allowed story status changes)
 scripts/              command-line scripts (pnpm seed, pnpm users)
 src/worker.ts         starts a queue worker (pnpm worker), apart from the API
-src/jobs/             the job queue (queue.ts), one job try (runJob.ts), the AI providers, story text (storyText.ts)
+src/jobs/             the job queue (queue.ts), one job try (runJob.ts), providers.ts (stub or fal), story text (storyText.ts)
+src/ai/               fal.ai (BE-10): the one door to fal.ai, prompts, reading the AI's JSON, the fal and stub providers
 src/engine/           the story rules engine (BE-09): plan, context, tables, rules, director; no HTTP or database
 src/routes/           one Router per area
 src/middleware/       validate, requestLogger, errorHandler
@@ -300,6 +307,42 @@ shows in Book Progress Detail (`GET /admin/stories/:id/progress`).
 `src/engine/director.ts` builds the instructions for the AI from the same plan (used by BE-10).
 Tests: `tests/unit/engine/` on fixed samples in `tests/fixtures/engine/` (no AI calls).
 
+## AI generation: story, pictures and title (BE-10)
+
+With `AI_PROVIDER=fal` and a `FAL_KEY`, the real AI makes the story. Tests and PCs without a key use the stub.
+
+```
+story_text   director prompt → fal-ai/any-llm → JSON with exactly 12 or 15 panels
+             (bad JSON / wrong count → the try fails → the queue retries; after the last try the
+              story waits with "Try again" and NO panels are saved: never half-built)
+             → BE-09 engine → saved
+panel_image  Scene Director (AI) → Visual Brief table → Universal Triumph   (fallback recorded)
+             + style (watercolour for Explorer, concept art for Creator) + Character Blueprint
+             + dream costume + tools + a fixed seed from hero name and dream
+             → FLUX → download → saved in OUR storage as stories/<id>/panel-03.png
+title        "[HeroName] and the [Poetic Version of the Dream]"; the formula if the AI's is off
+```
+
+| File | What it does |
+|---|---|
+| `src/ai/falClient.ts` | The one door to fal.ai: adds the key, time limits, short safe errors, downloads pictures. |
+| `src/ai/prompts.ts` | The messages sent to the AI (`PROMPT_VERSION` = `v1`), and hiding the hero's name. |
+| `src/ai/storyJson.ts` | Reads the AI's JSON; anything but exactly the planned panels throws (→ retry). |
+| `src/ai/falProvider.ts` / `stubProvider.ts` | The real AI / the fake one, same four methods. |
+| `src/engine/visual.ts` | Picture rules: styles, Character Blueprints, costumes, Visual Briefs, Universal Triumph, seed, title fallback. |
+| `src/lib/storage.ts` | Saves pictures (S3 in the UAE, or `data/storage` on your PC) and makes signed links. |
+| `src/routes/media.ts` | Serves local-folder pictures by signed link (your PC only). |
+
+- **The hero's name never goes to fal.ai.** The AI sees the stand-in "Tibbo"; the real name is put back in its answer.
+- **Pictures:** the story stores only the key. `GET /api/v1/stories/:id` gives each panel an `imageUrl`, and
+  `GET /api/v1/stories/:id/panels/:number/image` gives `{ url, expiresAt }`. Links expire after an hour.
+- **Records on every job:** `provider`, `aiModel`, `promptVersion`, `fallbackUsed` (`visual_brief`,
+  `universal_triumph`, `title_formula`; the job and panel status is then `fallback`), `durationMs`, `attempts`.
+- Tests: `tests/integration/falGeneration.test.ts` runs everything against a fake fal.ai server
+  (`tests/helpers/fakeFal.ts`); `tests/unit/ai.test.ts`. No real AI calls, no cost.
+
+To make a real story on your PC: put `AI_PROVIDER=fal` and `FAL_KEY=...` in `.env`, then `pnpm dev` (and `pnpm dev:worker` with Redis).
+
 ## Known gaps
 
 | Gap | Story | Notes |
@@ -310,7 +353,13 @@ Tests: `tests/unit/engine/` on fixed samples in `tests/fixtures/engine/` (no AI 
 | Eight beats in Panels 5 and **9** | BE-09 | The guide says "5 and 8"; read as 9 (the second brave move). Waiting for Sami Bhai. |
 | Core Noun rule | BE-09 | "be a vet" → "vet"; an action uses the dream-world noun; otherwise "dreamer". Waiting for Sami Bhai. |
 | Engine word tables are starters | BE-09 | Clinical words and dream worlds in `src/engine/tables.ts`; swap in the prototype's tables when they arrive. |
-| The AI is a stub | BE-10 | Placeholder text and picture keys; BE-10 adds fal.ai (and BE-14 its anonymising gate). |
+| Text model not confirmed | BE-10 | The PRD's Gemini Flash 1.5 is retired; `FAL_TEXT_MODEL` defaults to `google/gemini-2.5-flash`. Sami Bhai picks. |
+| Our own prompts (v1) | BE-10 | Written from the director and the PRD. Replace with the prototype's prompts (v2) if Sami Bhai sends them. |
+| Picture tables are starters | BE-10 | Blueprints, costumes, Visual Briefs and poetic dream names in `src/engine/visual.ts`. |
+| Only the hero's name is hidden | BE-14 | Other free text (dream, safe place, child's words) still goes to fal.ai as typed until BE-14. |
+| The UAE bucket | AWS-01 | Sami Bhai creates it; production refuses to start without `S3_BUCKET`. Until then pictures go to `data/storage`. |
+| Review of 3 real stories | BE-10 | Sami Bhai checks the hero keeps the same look, name and pronoun across panels. Needs a fal.ai key. |
+| "Marked failed" after the last try | BE-07 / BE-10 | The story waits in `generating` with the failed job and "Try again" (no `failed` story status in the guide's lifecycle). |
 | Comic jobs and picture redraw | BE-11, BE-12 | `comic_script`, `comic_cell_image` and `panel_redraw` jobs fail with "aren't built yet". A comic story gets storybook panels for now. |
 | Book Progress Detail screen | FE-15 | The admin API is ready; the frontend has no screen yet. |
 | Redis on AWS | AWS-01 | Sami Bhai sets up ElastiCache in the UAE region; production refuses to start without `REDIS_URL`. |

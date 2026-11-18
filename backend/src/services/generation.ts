@@ -136,6 +136,8 @@ export async function adminProgress(storyId: string) {
       panelNumber: j.panelNumber ?? null,
       provider: j.provider ?? null,
       aiModel: j.aiModel ?? null,
+      promptVersion: j.promptVersion ?? null,
+      fallbackUsed: j.fallbackUsed ?? null,
       durationMs: j.durationMs ?? null,
       attempts: j.attempts,
       error: j.error ?? null,

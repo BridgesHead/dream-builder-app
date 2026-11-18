@@ -83,7 +83,7 @@ describe(`generation (${queueKind()} queue)`, () => {
     expect(story.panels).toHaveLength(12);
     for (const panel of story.panels) {
       expect(panel.text).not.toBe("");
-      expect(panel.imageKey).toMatch(/^stub\//); // a key in our bucket, never a web link
+      expect(panel.imageKey).toMatch(/^stories\/[0-9a-f]{24}\/panel-\d{2}\.png$/); // a key in our bucket, never a web link
       expect([panel.textStatus, panel.imageStatus]).toEqual(["success", "success"]);
     }
     expect(story.title).toBe("Ember and the be a vet");
@@ -146,7 +146,7 @@ describe(`generation (${queueKind()} queue)`, () => {
     const retry = await request(app).post(`/api/v1/stories/${id}/generate/retry`).set(bearer(child));
     expect(retry.status).toBe(202);
     await waitFor(async () => (await statusOf(id)) === "child_review");
-    expect((await Story.findById(id).lean())!.panels[4].imageKey).toMatch(/^stub\//);
+    expect((await Story.findById(id).lean())!.panels[4].imageKey).toMatch(/^stories\/[0-9a-f]{24}\/panel-05\.png$/);
   });
 
   it("Try again with nothing failed is refused", async () => {

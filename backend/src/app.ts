@@ -8,6 +8,8 @@ import { createAuthRouter } from "./routes/auth.js";
 import { createChildSessionRouter } from "./routes/childSession.js";
 import { createChildrenRouter } from "./routes/children.js";
 import { createFacilitatorRouter } from "./routes/facilitator.js";
+import { createMediaRouter } from "./routes/media.js";
+import { getStorage } from "./lib/storage.js";
 import { createStoriesRouter } from "./routes/stories.js";
 import { healthRouter } from "./routes/health.js";
 
@@ -39,6 +41,8 @@ export function createApp() {
   api.use("/stories", createStoriesRouter());
   api.use("/facilitator", createFacilitatorRouter());
   api.use("/admin", createAdminRouter());
+  // Pictures from the local storage folder, by signed link (BE-10; S3 serves its own on AWS).
+  api.use("/media", createMediaRouter(getStorage().kind));
 
   app.use("/api/v1", api);
 

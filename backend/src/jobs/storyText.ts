@@ -58,7 +58,8 @@ export async function writeStoryText(provider: AiProvider, story: StoryForAi) {
 
     if (result.fatal) throw new StoryRulesError(result.fatal, violations([]));
     if (result.rewrite.length === 0) {
-      return { panels: result.panels, violations: violations([]), provider: first.provider, aiModel: first.aiModel, fallback: first.fallback };
+      const { provider, aiModel, fallback, fallbackUsed, promptVersion } = first;
+      return { provider, aiModel, fallback, fallbackUsed, promptVersion, panels: result.panels, violations: violations([]) };
     }
     if (round === MAX_REWRITE_ROUNDS) {
       const reasons = result.rewrite.map((f) => `${f.rule} (panel ${f.panelNumber}): ${f.message}`).join("; ");

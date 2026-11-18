@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Job, Story } from "../db/models/index.js";
 import { config } from "../config.js";
 import { logger } from "../lib/logger.js";
+import { getStorage, panelImageKey } from "../lib/storage.js";
 import { ensureJob, finishIfDone } from "../services/generation.js";
 import { PANEL_COUNT, type StoryPath } from "../types/story.js";
 import { getProvider, type AiResult, type StoryForAi } from "./providers.js";
@@ -15,13 +16,15 @@ import type { Attempt } from "./queue.js";
 // title), so a retry overwrites its own result and never adds a second panel.
 
 type JobDoc = NonNullable<Awaited<ReturnType<typeof Job.findOne>>>;
+/** The saved story, as much of it as the handlers read. */
+type StoryDoc = { panels: { number: number; text?: string | null }[] };
 
 interface Handler {
   timeoutMs: () => number;
   /** Before the AI call, e.g. show "running" on the panel. */
   onStart?(job: JobDoc): Promise<void>;
   /** The AI call, then saving its result on the story. Returns what to record on the job. */
-  run(job: JobDoc, story: StoryForAi): Promise<Omit<AiResult<unknown>, "value">>;
+  run(job: JobDoc, story: StoryForAi, saved: StoryDoc): Promise<Omit<AiResult<unknown>, "value">>;
   /** After the last try failed, e.g. show "failed" on the panel. */
   onFail?(job: JobDoc): Promise<void>;
 }
@@ -69,10 +72,16 @@ const HANDLERS: Partial<Record<JobDoc["type"], Handler>> = {
     async onStart(job) {
       await Story.updateOne(panelFilter(job), { $set: { "panels.$.imageStatus": "running" } });
     },
-    async run(job, story) {
-      const result = await getProvider().panelImage(story, job.panelNumber!);
+    async run(job, story, saved) {
+      const n = job.panelNumber!;
+      const text = saved.panels.find((p) => p.number === n)?.text ?? "";
+      const result = await getProvider().panelImage(story, n, text);
+      // Our own copy in OUR storage (the UAE bucket on AWS); the story keeps only its key.
+      // The same key on every try, so a retry replaces its own picture.
+      const key = panelImageKey(story.id, n, result.value.ext);
+      await getStorage().save(key, result.value.body, result.value.contentType);
       await Story.updateOne(panelFilter(job), {
-        $set: { "panels.$.imageKey": result.value, "panels.$.imageStatus": result.fallback ? "fallback" : "success" },
+        $set: { "panels.$.imageKey": key, "panels.$.imageStatus": result.fallback ? "fallback" : "success" },
       });
       return result;
     },
@@ -149,12 +158,14 @@ export async function runJob(jobId: string, { attempt, isLastAttempt }: Attempt)
       safePlaceText: story.safePlaceText,
       thirdChallengeText: story.thirdChallengeText,
     };
-    const result = await withTimeout(handler.run(job, forAi), handler.timeoutMs());
+    const result = await withTimeout(handler.run(job, forAi, story), handler.timeoutMs());
     await Job.updateOne(mine, {
       $set: {
         status: result.fallback ? "fallback" : "success",
         provider: result.provider,
         aiModel: result.aiModel,
+        promptVersion: result.promptVersion,
+        fallbackUsed: result.fallbackUsed,
         durationMs: Date.now() - started,
         error: null,
       },

@@ -41,6 +41,10 @@ const jobSchema = new Schema(
     provider: { type: String, maxlength: 50, default: null },
     aiModel: { type: String, maxlength: 100, default: null }, // e.g. the FLUX model name ("model" is reserved by Mongoose)
     durationMs: { type: Number, min: 0, default: null },
+    // Which version of our prompts made it (BE-10), and which fallback was used, if any
+    // ("visual_brief", "universal_triumph", "title_formula"). Then status is "fallback".
+    promptVersion: { type: String, maxlength: 20, default: null },
+    fallbackUsed: { type: String, maxlength: 50, default: null },
     attempts: { type: Number, min: 0, required: true, default: 0 },
     // A short reason when status is "failed" (or why the last try failed, while retrying).
     error: { type: String, maxlength: 1000, default: null },

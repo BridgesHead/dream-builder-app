@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
@@ -19,6 +21,12 @@ export default defineConfig({
       JOB_BACKOFF_MS: "10",
       TEXT_JOB_TIMEOUT_MS: "2000",
       IMAGE_JOB_TIMEOUT_MS: "2000",
+      // Pictures go to a throw-away folder, never your dev pictures (BE-10). Tests never use
+      // the real fal.ai or S3: the fal tests start their own fake fal.ai server.
+      AI_PROVIDER: "stub",
+      STORAGE_DIR: path.join(os.tmpdir(), "dream-builder-test-storage"),
+      S3_BUCKET: "",
+      FAL_KEY: "",
     },
     // Test files share one MongoDB; run them one after another so they don't step on each other.
     fileParallelism: false,

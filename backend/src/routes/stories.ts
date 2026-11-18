@@ -78,5 +78,12 @@ export function createStoriesRouter(): Router {
     return;
   });
 
+  // GET /api/v1/stories/:id/panels/:number/image → { url, expiresAt }: a short-lived link to
+  // that panel's picture in our storage (BE-10). 404 if the panel has no picture yet.
+  router.get("/:id/panels/:number/image", childOrParent, async (req, res) => {
+    res.json(await stories.panelImageLink(actorOf(req), String(req.params.id), String(req.params.number)));
+    return;
+  });
+
   return router;
 }

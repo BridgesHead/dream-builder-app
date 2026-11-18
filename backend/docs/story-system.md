@@ -157,7 +157,11 @@ engine leaves them out of every check and repair.
 | **Queue** | The to-do list of jobs. BullMQ + Redis, or in memory on a PC without Redis. | `src/jobs/queue.ts` |
 | **Worker** | A program that takes jobs off the list and does them (`pnpm worker`). | `src/worker.ts` |
 | **Try / attempt / retry** | Each job gets 3 tries, with growing waits in between. | `JOB_ATTEMPTS`, `JOB_BACKOFF_MS` |
-| **Provider** | Who makes the words and pictures: the **stub** (fake, placeholder text) now, fal.ai in BE-10. | `src/jobs/providers.ts` |
+| **Provider** | Who makes the words and pictures: **fal** (the real AI, BE-10) or the **stub** (fake, for tests). | `src/jobs/providers.ts`, `src/ai/` |
+| **Scene Director** | The AI that describes what each picture shows. If it fails: the **Visual Brief** table, then **Universal Triumph** (recorded as a fallback). | `src/ai/falProvider.ts`, `src/engine/visual.ts` |
+| **Character Blueprint** | The hero's fixed look on every picture (the robot's porthole eye and brass torso). | `src/engine/visual.ts` |
+| **Seed** | A fixed number from hero name + dream, the same for every panel, so FLUX keeps the hero looking the same. | `seedFor`, `visual.ts` |
+| **Stand-in name** | "Tibbo": what the AI sees instead of the hero's real name; the real name is put back afterwards. | `src/ai/prompts.ts` |
 | **Engine** | The story rules checker. No HTTP, no database. | `src/engine/` |
 | **Director** | The instructions the AI gets, panel by panel and beat by beat. | `src/engine/director.ts` |
 | **Draft panel** | A panel as the AI sends it: `{ number, text }`, or `{ number, beats: [8 sentences] }` for panels 5 and 9. | `DraftPanel` |
@@ -211,10 +215,12 @@ story_text job
   └─ 5. one panel_image job per panel goes on the list
 ```
 
-### Step 4: pictures and title (BE-07, real AI in BE-10)
+### Step 4: pictures and title (BE-10)
 
-- `panel_image` (one per panel): draws the picture and saves its **key in our bucket** (never a fal.ai link).
-- `title`: "[Hero name] and the [poetic version of the dream]".
+- `panel_image` (one per panel): the Scene Director describes the picture (or the Visual Brief table, or
+  Universal Triumph), FLUX draws it with the style, Character Blueprint, costume and seed, and we save
+  **our own copy** as `stories/<id>/panel-03.png` (never a fal.ai link).
+- `title`: "[Hero name] and the [poetic version of the dream]"; the formula if the AI's title has the wrong shape.
 
 ### Step 5: finished
 
@@ -274,13 +280,20 @@ src/
     types.ts                   rule names, Finding, DraftPanel, EngineResult
     rules/repairs.ts           fixes made by code
     rules/checks.ts            problems sent back for a rewrite
-    director.ts                the AI's instructions (BE-10 sends them)
+    director.ts                the AI's instructions, panel by panel
+    visual.ts                  picture rules: style, blueprint, costume, scenes, seed
     index.ts                   runEngine(): plan → beats → repairs → checks
   jobs/
     queue.ts                   the job list (BullMQ or in memory); the ONLY file that knows BullMQ
     runJob.ts                  one try of one job; one handler per job type
     storyText.ts               AI draft → engine → rewrites (max 2) → violations
-    providers.ts               who writes and draws: the stub now, fal.ai in BE-10
+    providers.ts               who writes and draws: fal or stub (the shape both follow)
+  ai/
+    falClient.ts               the one door to fal.ai
+    prompts.ts                 the AI's messages (PROMPT_VERSION), hiding the hero's name
+    storyJson.ts               reading the AI's JSON (exactly the planned panels, else retry)
+    falProvider.ts             the real AI
+    stubProvider.ts            the fake AI for tests
   services/
     stories.ts                 drafts, saving steps, reading, starting generation
     storyRules.ts              draft rules: mode, Challenge Gate, missing steps
@@ -290,7 +303,8 @@ src/
 tests/
   fixtures/engine/samples.ts   fixed sample stories (a good one; tests break one thing each)
   unit/engine/                 rules, defects, guide checks, plan, context, director
-  integration/generation.test.ts   the whole pipeline, with the stub AI
+  integration/generation.test.ts     the whole pipeline, with the stub AI
+  integration/falGeneration.test.ts  the fal provider against a fake fal.ai server
 ```
 
 ---
@@ -351,19 +365,19 @@ Edit `TWO_ACT_ROLES` in `src/engine/plan.ts`. If the count changes, also change 
 2. In `tables.ts`: `HERO_DEFAULT_NAMES`, `BODY_SIGNALS` (beat 3) and `HERO_PARTS` (bleed-guard).
 3. A test: the new hero's Signal beat passes, and another hero's signal is caught.
 
-### Connect the real AI (BE-10)
+### Change the AI (done in BE-10: `src/ai/falProvider.ts`)
 
-Write a fal.ai provider in `src/jobs/providers.ts` with the same four methods as the stub:
+Any provider has the same four methods:
 
 | Method | Must return |
 |---|---|
 | `storyText(story)` | `DraftPanel[]`: exactly the planned panels; panels 5 and 9 as `beats: [8 strings]` |
 | `rewritePanels(story, requests, current)` | `DraftPanel[]` for only the requested panels; `requests[].reasons` explains what to fix |
 | `title(story)` | the title |
-| `panelImage(story, n)` | the picture's key in **our** bucket |
+| `panelImage(story, n, text)` | the picture's bytes; `runJob` saves them in **our** storage |
 
-Build the prompt from `directStory(context)`. Ask for JSON in the shape of `outputShape`. Bad
-JSON or a wrong panel count → throw, and the queue retries. The engine, the rewrite loop, the
+Prompts live in `src/ai/prompts.ts` (built from `directStory`). When you change their wording, raise
+`PROMPT_VERSION`. Bad JSON or a wrong panel count → throw, and the queue retries. The engine, the rewrite loop, the
 queue and the status endpoint don't change.
 
 ### Before you call a story "done"
