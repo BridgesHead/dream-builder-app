@@ -57,10 +57,24 @@ export function createStoriesRouter(): Router {
     return;
   });
 
-  // POST /api/v1/stories/:id/generate: refused with the missing steps if the draft isn't complete.
+  // POST /api/v1/stories/:id/generate: refused with the missing steps if the draft isn't
+  // complete; otherwise 202 and the story is made in the background (BE-07).
   router.post("/:id/generate", childOnly, async (req, res) => {
     await stories.startGeneration(req.childSession!.childId, String(req.params.id));
-    res.status(202).end();
+    res.status(202).json({ status: await stories.getStatus(actorOf(req), String(req.params.id)) });
+    return;
+  });
+
+  // POST /api/v1/stories/:id/generate/retry: put the jobs that failed every try back on the list.
+  router.post("/:id/generate/retry", childOnly, async (req, res) => {
+    await stories.retryGeneration(req.childSession!.childId, String(req.params.id));
+    res.status(202).json({ status: await stories.getStatus(actorOf(req), String(req.params.id)) });
+    return;
+  });
+
+  // GET /api/v1/stories/:id/status: progress for Final Climb (FE-06). Asked every 2 seconds.
+  router.get("/:id/status", childOrParent, async (req, res) => {
+    res.json({ status: await stories.getStatus(actorOf(req), String(req.params.id)) });
     return;
   });
 

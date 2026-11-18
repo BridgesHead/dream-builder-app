@@ -22,10 +22,17 @@ jobs:
         image: mongo:8
         ports:
           - 27017:27017
+      # Redis for the BullMQ job queue (BE-07), so CI tests the real queue, including a
+      # worker that crashes mid-job.
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
 
     env:
       NODE_ENV: test
       MONGODB_URI: mongodb://127.0.0.1:27017/dream_builder_test
+      REDIS_URL: redis://127.0.0.1:6379
 
     steps:
       - uses: actions/checkout@v4

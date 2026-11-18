@@ -1,14 +1,28 @@
 import type { Request } from "express";
-import { ipKeyGenerator, rateLimit } from "express-rate-limit";
+import { ipKeyGenerator, rateLimit, type Store } from "express-rate-limit";
+import { RedisStore, type RedisReply } from "rate-limit-redis";
+import { config } from "../config.js";
 import { AppError } from "../lib/errors.js";
+import { getRedis } from "../lib/redis.js";
 
 // Rate limits (guide BE-03): stop someone trying thousands of passwords or sign-ups.
 //
-// ⚠️ The counts are kept in this server's memory. That's fine on one server, but on AWS with
-// several servers each would count separately, and a restart resets them. They move to a
-// shared store (Redis) when BE-07 brings Redis in.
+// Where the counts live (BE-07): in Redis when REDIS_URL is set, so every server on AWS shares
+// one count and a restart doesn't reset it. Without Redis (your PC) they're kept in memory.
+// Tests always use memory, so each test app starts with clean counts.
 
 const MINUTE = 60 * 1000;
+
+function storeFor(name: string): { store?: Store } {
+  if (!config.redisUrl || config.nodeEnv === "test") return {};
+  const redis = getRedis();
+  return {
+    store: new RedisStore({
+      prefix: `rate-limit:${name}:`,
+      sendCommand: (command: string, ...args: string[]) => redis.call(command, ...args) as Promise<RedisReply>,
+    }),
+  };
+}
 
 function tooMany(message: string) {
   return (_req: Request, _res: unknown, next: (err: unknown) => void) => {
@@ -27,6 +41,7 @@ export function createAuthRateLimits() {
     // 10 FAILED logins for one email in 15 minutes → that email is blocked for the rest of the
     // 15 minutes, even with the right password. Successful logins don't count.
     login: rateLimit({
+      ...storeFor("login"),
       windowMs: 15 * MINUTE,
       limit: 10,
       skipSuccessfulRequests: true,
@@ -41,6 +56,7 @@ export function createAuthRateLimits() {
 
     // 5 sign-ups per hour from one IP address.
     register: rateLimit({
+      ...storeFor("register"),
       windowMs: 60 * MINUTE,
       limit: 5,
       keyGenerator: ipKey,
@@ -52,6 +68,7 @@ export function createAuthRateLimits() {
     // Leaving a child session (BE-04): 10 WRONG parent passwords in 15 minutes per parent,
     // so a child can't keep guessing. Runs after allow("child_session"), which sets req.childSession.
     childExit: rateLimit({
+      ...storeFor("childExit"),
       windowMs: 15 * MINUTE,
       limit: 10,
       skipSuccessfulRequests: true,
@@ -63,6 +80,7 @@ export function createAuthRateLimits() {
 
     // 5 "send me an email" requests (forgot password, resend verification) per hour per IP.
     email: rateLimit({
+      ...storeFor("email"),
       windowMs: 60 * MINUTE,
       limit: 5,
       keyGenerator: ipKey,

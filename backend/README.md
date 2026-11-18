@@ -27,6 +27,9 @@ pnpm seed                     # optional: fill the local database with the Sprin
 pnpm dev                      # starts the API and restarts it when you save a file
 ```
 
+Without Redis, story jobs run inside the API (fine on your PC). With Redis (see "Story generation"
+below), set `REDIS_URL` in `.env` and also run `pnpm dev:worker` in a second terminal.
+
 Check it works: open <http://localhost:3000/api/v1/health>. You should see:
 
 ```json
@@ -85,7 +88,9 @@ src/config.ts         reads and checks environment variables
 src/db/               MongoDB connection, seed data
 src/db/models/        Mongoose models: one file per collection (see docs/data-model.md)
 src/services/         real logic, e.g. storyLifecycle (allowed story status changes)
-scripts/              command-line scripts (pnpm seed)
+scripts/              command-line scripts (pnpm seed, pnpm users)
+src/worker.ts         starts a queue worker (pnpm worker), apart from the API
+src/jobs/             the job queue (queue.ts), one job try (runJob.ts), the AI providers
 src/routes/           one Router per area
 src/middleware/       validate, requestLogger, errorHandler
 src/lib/              logger, errors (the shared error shape)
@@ -203,7 +208,7 @@ Under `/api/v1/stories`:
 | `GET /` | child session, verified parent | Summaries, newest first. Child: my stories. Parent: my children's (`?childId=` for one child). |
 | `GET /:id` | child session, verified parent | Every field of one story |
 | `PATCH /:id` | child session | Save one wizard step: only the fields that changed. Drafts only (409 `STORY_NOT_DRAFT` otherwise). |
-| `POST /:id/generate` | child session | 400 `STORY_INCOMPLETE` with `fields.missingSteps` if a step isn't done; a complete draft gets 503 `GENERATION_NOT_READY` until BE-07 |
+| `POST /:id/generate` | child session | 400 `STORY_INCOMPLETE` with `fields.missingSteps` if a step isn't done; otherwise 202, the story moves to `generating` and the job queue makes it (BE-07) |
 
 Rules (`src/services/storyRules.ts`, option ids in `src/types/story.ts`, copied from the frontend's `content.ts`):
 
@@ -215,14 +220,57 @@ Rules (`src/services/storyRules.ts`, option ids in `src/types/story.ts`, copied 
 
 Error codes: `STORY_NOT_DRAFT`, `STORY_INCOMPLETE`, `GENERATION_NOT_READY`.
 
+## Story generation and the job queue (BE-07)
+
+`POST /stories/:id/generate` moves the story to `generating` and puts jobs on a list. Workers do them:
+
+```
+story_text (writes every panel)  ─►  one panel_image job per panel
+title
+all done  ─►  story generating → child_review
+```
+
+| Route | Who | What it does |
+|---|---|---|
+| `GET /stories/:id/status` | child session, verified parent | `{ status, progress (0–100), panels: [{ number, textStatus, imageStatus }], failed: [...], canRetry }`. Final Climb asks every 2 seconds. |
+| `POST /stories/:id/generate/retry` | child session | Puts the jobs that failed every try back on the list ("Try again"). 409 if none failed. |
+| `GET /admin/stories/:id/progress` | admin | Book Progress Detail: the same status, plus every job (provider, model, duration, tries, error) and the story-rule violations |
+
+How it stays reliable:
+
+- **Retries:** each job gets `JOB_ATTEMPTS` tries (3), waiting `JOB_BACKOFF_MS` (5s), then twice that, then 4x.
+  After the last try it is `failed` with its reason, and the story waits in `generating` for "Try again".
+- **Time limits:** `TEXT_JOB_TIMEOUT_MS` (60s) and `IMAGE_JOB_TIMEOUT_MS` (120s) per try.
+- **fal.ai limits:** `QUEUE_CONCURRENCY` jobs at once per worker (4), at most `AI_CALLS_PER_SECOND` starts a second (10).
+- **A crashed worker:** its job's lock runs out and another worker retries it. Every job writes to its own
+  panel number and is queued under a fixed key, so a retry never adds a second panel or job.
+- **Every job records** provider, model, duration and tries.
+
+The queue (`src/jobs/queue.ts`, the only file that knows the library):
+
+| `REDIS_URL` | Queue | Who does the jobs |
+|---|---|---|
+| set (CI, AWS, or your PC with Redis) | BullMQ + Redis | `pnpm worker` (one or more), apart from the API |
+| not set (your PC only) | in memory | the API itself; a restart puts unfinished jobs back. Refused in production. |
+
+Redis on your PC (optional): Docker (`docker run -d -p 6379:6379 redis:7`), Memurai, or Redis in WSL.
+
+Until BE-10 the AI is a **stub** (`AI_PROVIDER=stub`): placeholder text ("Panel 3 of Ember's story…") and
+picture keys like `stub/<story id>/panel-03.webp`, after `STUB_DELAY_MS`. The rate-limit counts (BE-03) also
+live in Redis when `REDIS_URL` is set.
+
 ## Known gaps
 
 | Gap | Story | Notes |
 |---|---|---|
 | Google and Apple sign-in | BE-03 | Left for later (Sami Bhai's decision to make). Apple also waits for Dina's Apple developer account. |
 | Real email sending | AWS-01 | Until Sami Bhai sets up email from Dina's domain, production only logs "email NOT sent". |
-| Rate-limit counts are in memory | BE-07 | Each server counts on its own and a restart resets them. Move them to Redis when BE-07 adds it. |
-| Story generation is switched off | BE-07, BE-10 | `POST /stories/:id/generate` checks the draft, then answers 503 and leaves it a draft. |
+| The AI is a stub | BE-10 | Placeholder text and picture keys; BE-10 adds fal.ai (and BE-14 its anonymising gate). |
+| Comic jobs and picture redraw | BE-11, BE-12 | `comic_script`, `comic_cell_image` and `panel_redraw` jobs fail with "aren't built yet". A comic story gets storybook panels for now. |
+| Book Progress Detail screen | FE-15 | The admin API is ready; the frontend has no screen yet. |
+| Redis on AWS | AWS-01 | Sami Bhai sets up ElastiCache in the UAE region; production refuses to start without `REDIS_URL`. |
+| The worker-crash test needs Redis | BE-07 | It runs in CI (Redis service); on a PC without Redis it is skipped. |
+| Queue library not yet confirmed | BE-07 | Built with BullMQ + Redis as recommended; waiting for Sami Bhai's OK. |
 | Exact Creator-only field list | BE-08 | Not written in the guide; uses the Creator option lists from `content.ts`. Waiting for Sami Bhai (PRD). |
 | `oneMoreAmazingThing` rule | BE-08 | Basic tidy-up only (defect 8). Waiting for Sami Bhai to confirm the PRD's rule. |
 | Wizard and library on the real API | BE-08 / FE | The frontend still uses localStorage; wired together with the BE-04 handover screens. |
@@ -231,7 +279,7 @@ Error codes: `STORY_NOT_DRAFT`, `STORY_INCOMPLETE`, `GENERATION_NOT_READY`.
 | Story edit, redraw and approve routes in the access matrix | BE-08, BE-11, BE-12 | Facilitators must get 403 on them; add each to the matrix when built. |
 | Admin second factor (MFA) | Later story in the guide | Admin login is password only for now. |
 | Refresh-token rotation | BE-23 | The guide schedules rotation for BE-23. |
-| A failed generation has no way back from `generating` | BE-10 | Open question for Sami Bhai (see `docs/data-model.md`). |
+| A failed generation has no way back from `generating` | BE-07 | It waits there with "Try again" (decision 4A). Open question for Sami Bhai: allow `generating → draft`? |
 
 ## Errors
 

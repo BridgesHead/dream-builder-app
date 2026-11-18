@@ -9,6 +9,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../../src/app.js";
 import { config } from "../../src/config.js";
 import { connectToDatabase, disconnectFromDatabase } from "../../src/db/connect.js";
+import { closeQueue } from "../../src/jobs/queue.js";
+import { closeRedis } from "../../src/lib/redis.js";
 import { ALL_MODELS } from "../../src/db/models/index.js";
 import { accessRuleOf, WHO, type Who } from "../../src/middleware/access.js";
 import { bearer, makeChild, makeChildSession, makeUser } from "../helpers/actors.js";
@@ -56,6 +58,8 @@ const MATRIX: Entry[] = [
   { method: "get", mount: "/stories", path: "/:id", rule: ["child_session", "verified_parent"], callers: ["child_session", "parent"] },
   { method: "patch", mount: "/stories", path: "/:id", rule: ["child_session"], callers: ["child_session"] },
   { method: "post", mount: "/stories", path: "/:id/generate", rule: ["child_session"], callers: ["child_session"] },
+  { method: "post", mount: "/stories", path: "/:id/generate/retry", rule: ["child_session"], callers: ["child_session"] },
+  { method: "get", mount: "/stories", path: "/:id/status", rule: ["child_session", "verified_parent"], callers: ["child_session", "parent"] },
 
   { method: "get", mount: "/facilitator", path: "/children", rule: ["facilitator"], callers: ["facilitator"] },
   { method: "get", mount: "/facilitator", path: "/children/:childId/stories", rule: ["facilitator"], callers: ["facilitator"] },
@@ -63,6 +67,7 @@ const MATRIX: Entry[] = [
 
   { method: "get", mount: "/admin", path: "/audit-log", rule: ["admin"], callers: ["admin"] },
   { method: "get", mount: "/admin", path: "/stories/:storyId", rule: ["admin"], callers: ["admin"] },
+  { method: "get", mount: "/admin", path: "/stories/:storyId/progress", rule: ["admin"], callers: ["admin"] },
 ];
 
 // Every route Express knows about, with the allow(...) rule on its first handler.
@@ -106,6 +111,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await closeQueue();
+  await closeRedis();
   await disconnectFromDatabase();
 });
 

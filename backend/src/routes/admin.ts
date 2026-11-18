@@ -3,6 +3,7 @@ import { z } from "zod";
 import { AppError } from "../lib/errors.js";
 import { allow } from "../middleware/access.js";
 import { listAudit } from "../services/audit.js";
+import { getAdminProgress } from "../services/stories.js";
 import { adminViewStory } from "../services/storyViews.js";
 
 // Admin routes (guide BE-05). Mounted at /api/v1/admin. Admin accounts are made only by the
@@ -40,6 +41,13 @@ export function createAdminRouter(): Router {
   // GET /api/v1/admin/stories/:storyId: open any story (written to the audit log).
   router.get("/stories/:storyId", adminOnly, async (req, res) => {
     res.json({ story: await adminViewStory(req.user!.id, String(req.params.storyId), req.ip) });
+    return;
+  });
+
+  // GET /api/v1/admin/stories/:storyId/progress: Book Progress Detail (FE-15): per-panel
+  // status, every job (provider, model, time, tries, error) and the story-rule violations.
+  router.get("/stories/:storyId/progress", adminOnly, async (req, res) => {
+    res.json({ progress: await getAdminProgress(String(req.params.storyId)) });
     return;
   });
 

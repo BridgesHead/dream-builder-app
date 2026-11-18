@@ -2,6 +2,7 @@ import { isValidObjectId } from "mongoose";
 import { Child, Story } from "../db/models/index.js";
 import { AppError } from "../lib/errors.js";
 import type { StoryPatch } from "../types/story.js";
+import { adminProgress, beginGeneration, retryFailed, storyStatus } from "./generation.js";
 import { assertStatusChange } from "./storyLifecycle.js";
 import { changesForSave, missingSteps } from "./storyRules.js";
 import { storySummary } from "./storyViews.js";
@@ -25,7 +26,7 @@ async function reachableChildIds(actor: StoryActor): Promise<string[]> {
 }
 
 // One story this actor may reach, or 404.
-async function findReachableStory(actor: StoryActor, storyId: string) {
+export async function findReachableStory(actor: StoryActor, storyId: string) {
   // Check the id first: a nonsense id would make MongoDB throw (a 500).
   if (!isValidObjectId(storyId)) throw notFound();
   const story = await Story.findOne({ _id: storyId, childId: { $in: await reachableChildIds(actor) } });
@@ -71,7 +72,7 @@ export async function saveStep(childId: string, storyId: string, patch: StoryPat
 }
 
 // POST /stories/:id/generate: generation starts only from a complete draft (defect 2).
-export async function startGeneration(childId: string, storyId: string): Promise<never> {
+export async function startGeneration(childId: string, storyId: string): Promise<void> {
   const story = await findReachableStory({ kind: "child", childId }, storyId);
   // Only a draft can start generating (409 otherwise).
   assertStatusChange(story.status, "generating");
@@ -80,7 +81,24 @@ export async function startGeneration(childId: string, storyId: string): Promise
   if (missing.length > 0) {
     throw new AppError(400, "STORY_INCOMPLETE", "Some story steps aren't finished yet", { missingSteps: missing });
   }
-  // Decision 3A: the job queue arrives in BE-07. Until then the story stays a draft, so
-  // nothing gets stuck in "generating" with no worker to finish it.
-  throw new AppError(503, "GENERATION_NOT_READY", "Story generation isn't switched on yet");
+  // The job queue makes it in the background (BE-07); Final Climb follows GET /status.
+  await beginGeneration(storyId);
+}
+
+// GET /stories/:id/status: overall progress plus text and picture status per panel.
+export async function getStatus(actor: StoryActor, storyId: string) {
+  return storyStatus(await findReachableStory(actor, storyId));
+}
+
+// POST /stories/:id/generate/retry: the "Try again" button on Final Climb.
+export async function retryGeneration(childId: string, storyId: string): Promise<void> {
+  const story = await findReachableStory({ kind: "child", childId }, storyId);
+  if (story.status !== "generating") throw new AppError(409, "CONFLICT", "This story isn't being made right now");
+  await retryFailed(storyId);
+}
+
+// GET /admin/stories/:id/progress: Book Progress Detail (FE-15).
+export async function getAdminProgress(storyId: string) {
+  if (!isValidObjectId(storyId)) throw notFound();
+  return adminProgress(storyId);
 }

@@ -9,7 +9,7 @@ import { Arrow, Button, Card, Heading, LinkButton, Subtle } from "@/components/u
 import { heroAvatar } from "@/data/assets";
 import { inPreviewMode, useAppState } from "@/state/AppState";
 import { ApiError } from "@/lib/api";
-import { generateStory, routeForStep } from "@/lib/stories";
+import { generateStory, getGenerationStatus, retryGeneration, routeForStep, type GenerationStatus } from "@/lib/stories";
 import { possessive } from "@/lib/text";
 import { ROUTES } from "@/lib/routes";
 
@@ -23,53 +23,100 @@ const GEN_STEPS: { label: string; until: number; status: (page: number) => strin
   { label: "Putting your book together", until: 100, status: () => "Binding the pages…" },
 ];
 
-// First the server checks the draft is complete (backend BE-08): if a step is missing, the
-// child goes straight back to it, so the book never shows empty pages.
-// The job queue that really makes the story comes in BE-07; until then the server answers
-// GENERATION_NOT_READY and this screen only animates, then moves on. When BE-07 lands,
-// drive `progress` from the status endpoint instead of the timer.
+const POLL_MS = 2000;
+const messageOf = (err: unknown) => (err instanceof ApiError ? err.message : "Something went wrong. Please try again.");
+
+// Final Climb (FE-06). The server makes the story in the background (backend BE-07):
+//   1. ask it to start; if a step is missing, the child goes straight back to it (BE-08),
+//      so the book never shows empty pages
+//   2. ask "how far along?" every 2 seconds and show the real progress
+//   3. a job that failed every try shows a "Try again" button
+// Preview mode (demo data, no login) keeps the old animation.
 export function GeneratingScreen() {
   const [, navigate] = useLocation();
   const { story, updateStory, storyId, flushStory } = useAppState();
-  const [progress, setProgress] = useState(0);
-  const [checked, setChecked] = useState(false);
+  const demo = inPreviewMode() || !storyId;
+  const [demoProgress, setDemoProgress] = useState(0);
+  const [server, setServer] = useState<GenerationStatus | null>(null);
+  const [started, setStarted] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
 
+  // 1. Start (or find it already started).
   useEffect(() => {
-    if (inPreviewMode() || !storyId) {
-      setChecked(true);
-      return;
-    }
+    if (demo) return;
     let cancelled = false;
     void (async () => {
       try {
         await flushStory();
-        await generateStory(storyId);
+        const status = await generateStory(storyId);
+        if (!cancelled) setServer(status);
       } catch (err) {
         const missing = err instanceof ApiError && err.code === "STORY_INCOMPLETE" ? err.fields.missingSteps : undefined;
-        if (!cancelled && missing?.length) {
+        if (cancelled) return;
+        if (missing?.length) {
           navigate(routeForStep(missing[0]), { replace: true });
           return;
         }
-        // GENERATION_NOT_READY (no queue yet) or no connection: keep the demo going.
+        // Already being made (e.g. the page was reloaded): just follow it.
+        if (!(err instanceof ApiError && err.code === "INVALID_STATUS_CHANGE")) setProblem(messageOf(err));
       }
-      if (!cancelled) setChecked(true);
+      if (!cancelled) setStarted(true);
     })();
     return () => {
       cancelled = true;
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 2. Follow the real status.
   useEffect(() => {
-    if (!checked) return;
-    const id = setInterval(() => setProgress((p) => Math.min(p + 4, 100)), 120);
+    if (demo || !started) return;
+    let cancelled = false;
+    const check = () =>
+      getGenerationStatus(storyId)
+        .then((status) => {
+          if (cancelled) return;
+          setServer(status);
+          setProblem(null);
+        })
+        .catch((err) => !cancelled && setProblem(messageOf(err)));
+    void check();
+    const id = setInterval(() => void check(), POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [started]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Preview mode: the old timer.
+  useEffect(() => {
+    if (!demo) return;
+    const id = setInterval(() => setDemoProgress((p) => Math.min(p + 4, 100)), 120);
     return () => clearInterval(id);
-  }, [checked]);
+  }, [demo]);
+
+  const progress = demo ? demoProgress : (server?.progress ?? 0);
+  const finished = demo ? demoProgress >= 100 : !!server && server.status !== "draft" && server.status !== "generating";
 
   useEffect(() => {
-    if (progress < 100) return;
+    if (!finished) return;
     updateStory({ storyGeneratedAt: new Date().toISOString() });
     navigate(ROUTES.ready);
-  }, [progress]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [finished]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 3. "Try again" for jobs that failed every try.
+  const tryAgain = async () => {
+    if (!storyId) return;
+    setRetrying(true);
+    try {
+      setServer(await retryGeneration(storyId));
+      setProblem(null);
+    } catch (err) {
+      setProblem(messageOf(err));
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   const book = story.selectedFormat === "comic" ? "Comic Book" : "Storybook";
   const current = GEN_STEPS.findIndex((s) => progress < s.until);
@@ -125,6 +172,20 @@ export function GeneratingScreen() {
             >
               <div className="h-full rounded-full bg-brand/70 transition-all" style={{ width: `${progress}%` }} />
             </div>
+            {/* A job failed every try (FE-06 retry state). */}
+            {server?.canRetry && (
+              <div role="alert" className="mt-5 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                <p className="font-semibold">Part of your story didn't work this time.</p>
+                <Button className="mt-3" disabled={retrying} onClick={() => void tryAgain()}>
+                  {retrying ? "Trying again…" : "Try again"} <Arrow />
+                </Button>
+              </div>
+            )}
+            {problem && !server?.canRetry && (
+              <p role="alert" className="mt-4 rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                {problem}
+              </p>
+            )}
           </div>
           <div className="border-t border-ink/10 py-4">
             <LinkButton href={ROUTES.start} variant="outline">

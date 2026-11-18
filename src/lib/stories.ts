@@ -57,13 +57,35 @@ export async function saveStory(id: string, patch: Partial<StoryState>): Promise
   await api(`/stories/${encodeURIComponent(id)}`, { method: "PATCH", body: patch });
 }
 
+type WorkStatus = "queued" | "running" | "success" | "fallback" | "failed";
+
+/** How far along the story is (backend BE-07), for Final Climb. */
+export interface GenerationStatus {
+  status: StorySummary["status"];
+  /** 0–100 */
+  progress: number;
+  panels: { number: number; textStatus: WorkStatus; imageStatus: WorkStatus }[];
+  /** Jobs that failed every try; "Try again" puts them back. */
+  failed: { type: string; panelNumber: number | null; error: string | null }[];
+  canRetry: boolean;
+}
+
 /**
  * Asks the server to make the story. It refuses an unfinished draft with STORY_INCOMPLETE
- * and the missing steps (ApiError.fields.missingSteps); until the job queue exists (BE-07)
- * a finished draft gets GENERATION_NOT_READY.
+ * and the missing steps (ApiError.fields.missingSteps); a story already being made gets
+ * INVALID_STATUS_CHANGE.
  */
-export function generateStory(id: string): Promise<void> {
-  return api(`/stories/${encodeURIComponent(id)}/generate`, { method: "POST" });
+export async function generateStory(id: string): Promise<GenerationStatus> {
+  return (await api<{ status: GenerationStatus }>(`/stories/${encodeURIComponent(id)}/generate`, { method: "POST" })).status;
+}
+
+export async function getGenerationStatus(id: string): Promise<GenerationStatus> {
+  return (await api<{ status: GenerationStatus }>(`/stories/${encodeURIComponent(id)}/status`)).status;
+}
+
+/** "Try again": the jobs that failed every try go back on the list. */
+export async function retryGeneration(id: string): Promise<GenerationStatus> {
+  return (await api<{ status: GenerationStatus }>(`/stories/${encodeURIComponent(id)}/generate/retry`, { method: "POST" })).status;
 }
 
 /** The wizard screen for one of the server's step names (e.g. "act1.feeling" or "gate"). */

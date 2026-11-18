@@ -37,8 +37,11 @@ const jobSchema = new Schema(
     aiModel: { type: String, maxlength: 100, default: null }, // e.g. the FLUX model name ("model" is reserved by Mongoose)
     durationMs: { type: Number, min: 0, default: null },
     attempts: { type: Number, min: 0, required: true, default: 0 },
-    // A short reason when status is "failed".
+    // A short reason when status is "failed" (or why the last try failed, while retrying).
     error: { type: String, maxlength: 1000, default: null },
+    // Which try is the current one. A try only saves its result if this still matches, so a
+    // stuck old try (e.g. from a worker that crashed) can't overwrite the newer try's result.
+    runId: { type: String, maxlength: 100, default: null },
     violations: { type: [violationSchema], default: [] },
   },
   baseSchemaOptions,

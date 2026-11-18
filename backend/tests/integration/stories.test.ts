@@ -6,6 +6,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../../src/app.js";
 import { config } from "../../src/config.js";
 import { connectToDatabase, disconnectFromDatabase } from "../../src/db/connect.js";
+import { closeQueue } from "../../src/jobs/queue.js";
+import { closeRedis } from "../../src/lib/redis.js";
 import { ALL_MODELS, Child, Story } from "../../src/db/models/index.js";
 import { bearer, makeChild, makeChildSession, makeUser } from "../helpers/actors.js";
 
@@ -18,6 +20,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await closeQueue();
+  await closeRedis();
   await disconnectFromDatabase();
 });
 
@@ -158,14 +162,15 @@ describe("generation", () => {
     expect(res.body.error.fields.missingSteps).toEqual(["act3.obstacle", "act3.feeling", "act3.move"]);
   });
 
-  it("a complete draft passes the check, then waits for BE-07 (503) and stays a draft", async () => {
+  it("a complete draft starts generating (202); the job queue does the rest (BE-07)", async () => {
     const { child } = await family();
     const id = await newDraft(child);
     for (const step of [...EXPLORER_STEPS, { facesChallenge3: false }]) await save(child, id, step);
     const res = await request(app).post(`/api/v1/stories/${id}/generate`).set(bearer(child));
-    expect(res.status).toBe(503);
-    expect(res.body.error.code).toBe("GENERATION_NOT_READY");
-    expect((await Story.findById(id).lean())!.status).toBe("draft");
+    expect(res.status).toBe(202);
+    expect((await Story.findById(id).lean())!.status).toBe("generating");
+    // ...and the wizard can't change it any more.
+    expect((await save(child, id, { authorName: "Changed" })).status).toBe(409);
   });
 });
 

@@ -33,7 +33,7 @@ export type ErrorCode =
   // BE-08 story drafts
   | "STORY_NOT_DRAFT" // the story has left draft, so the wizard can't change it
   | "STORY_INCOMPLETE" // generation asked for before every step is done; fields.missingSteps lists them
-  | "GENERATION_NOT_READY" // generation isn't switched on until BE-07
+  | "GENERATION_NOT_READY" // the job queue couldn't take the story (e.g. Redis is down); try again
   | "INTERNAL_ERROR";
 
 export type FieldErrors = Record<string, string[] | undefined>;
