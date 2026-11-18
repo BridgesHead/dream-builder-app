@@ -147,8 +147,8 @@ Child sessions, under `/api/v1/auth/child-session` (under `/auth` because they s
 | `POST /` | Parent token, `{ childId }` → 201 `{ kind: "child", child, accessToken, expiresIn }`. The parent's session on this device ends; a child session starts (browser-session cookie, 12 hours at most). |
 | `POST /exit` | Child token, `{ password }` (the parent's) → `{ kind: "parent", user, accessToken, expiresIn }` and a fresh parent session. 10 wrong passwords per parent in 15 minutes → 429. |
 
-A child token (`role: "child_session"`) is refused (403) by every parent route. Story routes (BE-08) will
-use `allow("child_session")` plus `assertOwnChild` so a child reaches only their own stories.
+A child token (`role: "child_session"`) is refused (403) by every parent route. Story routes (BE-08)
+use `allow("child_session")` and look stories up by the session's child, so a child reaches only their own stories.
 Removing the child or exiting stops the child token at once, not 15 minutes later.
 
 ## Roles, access rules and audit log (BE-05)
@@ -193,6 +193,28 @@ Audit actions: `auth.sign_in`, `consent.record`, `child.create`, `child.update`,
 `user.create`, `user.role_change`, `facilitator.link`, `facilitator.unlink`. Each holds who, what,
 which record, when and from where; never story text or secrets.
 
+## Story drafts and the wizard (BE-08)
+
+Under `/api/v1/stories`:
+
+| Route | Who | What it does |
+|---|---|---|
+| `POST /` | child session | `{ authorName? }` → 201 a new draft for the child in this session, in that child's mode |
+| `GET /` | child session, verified parent | Summaries, newest first. Child: my stories. Parent: my children's (`?childId=` for one child). |
+| `GET /:id` | child session, verified parent | Every field of one story |
+| `PATCH /:id` | child session | Save one wizard step: only the fields that changed. Drafts only (409 `STORY_NOT_DRAFT` otherwise). |
+| `POST /:id/generate` | child session | 400 `STORY_INCOMPLETE` with `fields.missingSteps` if a step isn't done; a complete draft gets 503 `GENERATION_NOT_READY` until BE-07 |
+
+Rules (`src/services/storyRules.ts`, option ids in `src/types/story.ts`, copied from the frontend's `content.ts`):
+
+- Every answer must be a real option id; `heroPronoun` is `he` or `she` only. `status`, `mode`, `storyPath`, `childId`, `confirmedByChild` and `storyGeneratedAt` can't be sent.
+- Mode rules: an Explorer draft refuses Creator strengths and Creator final-act feelings (and the other way round). The story keeps the mode it started with.
+- `storyPath` follows `facesChallenge3` (true = `three_act`, false = `two_act`). Two acts clears `obstacles3`, `heartColor3`, `braveMove3`, `heroWords3` and `thirdChallengeText`, and refuses new Act 3 answers.
+- `oneMoreAmazingThing` is trimmed, single-spaced and loses trailing full stops for every caller.
+- `missingSteps` uses the frontend wizard's step names (`author`, `format`, `style`, `hero`, `heroName`, `strength`, `dream`, `act1.obstacle` … for Explorer, `act1` … for Creator, `rest`, `gate`), in wizard order.
+
+Error codes: `STORY_NOT_DRAFT`, `STORY_INCOMPLETE`, `GENERATION_NOT_READY`.
+
 ## Known gaps
 
 | Gap | Story | Notes |
@@ -200,7 +222,10 @@ which record, when and from where; never story text or secrets.
 | Google and Apple sign-in | BE-03 | Left for later (Sami Bhai's decision to make). Apple also waits for Dina's Apple developer account. |
 | Real email sending | AWS-01 | Until Sami Bhai sets up email from Dina's domain, production only logs "email NOT sent". |
 | Rate-limit counts are in memory | BE-07 | Each server counts on its own and a restart resets them. Move them to Redis when BE-07 adds it. |
-| Child-session guard not on story routes yet | BE-08 | Story routes don't exist yet; the guard is built and tested with a test-only route. |
+| Story generation is switched off | BE-07, BE-10 | `POST /stories/:id/generate` checks the draft, then answers 503 and leaves it a draft. |
+| Exact Creator-only field list | BE-08 | Not written in the guide; uses the Creator option lists from `content.ts`. Waiting for Sami Bhai (PRD). |
+| `oneMoreAmazingThing` rule | BE-08 | Basic tidy-up only (defect 8). Waiting for Sami Bhai to confirm the PRD's rule. |
+| Wizard and library on the real API | BE-08 / FE | The frontend still uses localStorage; wired together with the BE-04 handover screens. |
 | A parent token stays valid up to 15 minutes after handover | BE-23 | It lives only in the page's memory and the frontend drops it at handover. |
 | Facilitator portal screen (FE-14) | FE-14 | The API is ready; the frontend has no portal screen yet. |
 | Story edit, redraw and approve routes in the access matrix | BE-08, BE-11, BE-12 | Facilitators must get 403 on them; add each to the matrix when built. |

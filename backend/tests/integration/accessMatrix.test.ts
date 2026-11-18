@@ -51,6 +51,12 @@ const MATRIX: Entry[] = [
   { method: "patch", mount: "/children", path: "/:id", rule: ["verified_parent"], callers: ["parent"] },
   { method: "delete", mount: "/children", path: "/:id", rule: ["verified_parent"], callers: ["parent"] },
 
+  { method: "post", mount: "/stories", path: "/", rule: ["child_session"], callers: ["child_session"] },
+  { method: "get", mount: "/stories", path: "/", rule: ["child_session", "verified_parent"], callers: ["child_session", "parent"] },
+  { method: "get", mount: "/stories", path: "/:id", rule: ["child_session", "verified_parent"], callers: ["child_session", "parent"] },
+  { method: "patch", mount: "/stories", path: "/:id", rule: ["child_session"], callers: ["child_session"] },
+  { method: "post", mount: "/stories", path: "/:id/generate", rule: ["child_session"], callers: ["child_session"] },
+
   { method: "get", mount: "/facilitator", path: "/children", rule: ["facilitator"], callers: ["facilitator"] },
   { method: "get", mount: "/facilitator", path: "/children/:childId/stories", rule: ["facilitator"], callers: ["facilitator"] },
   { method: "get", mount: "/facilitator", path: "/stories/:storyId", rule: ["facilitator"], callers: ["facilitator"] },

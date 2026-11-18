@@ -11,7 +11,7 @@ import { toPublicChild } from "./children.js";
 const notFound = (what: string) => new AppError(404, "NOT_FOUND", `${what} not found`);
 
 // One row of the FE-14 portal story history: no story text, just what the list needs.
-function storySummary(story: {
+export function storySummary(story: {
   _id: unknown;
   childId: unknown;
   title?: string | null;

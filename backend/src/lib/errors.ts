@@ -30,6 +30,10 @@ export type ErrorCode =
   | "LINK_USED" // a verify/reset link that already worked once
   | "LINK_EXPIRED" // a verify/reset link older than 24 hours
   | "TOO_MANY_ATTEMPTS"
+  // BE-08 story drafts
+  | "STORY_NOT_DRAFT" // the story has left draft, so the wizard can't change it
+  | "STORY_INCOMPLETE" // generation asked for before every step is done; fields.missingSteps lists them
+  | "GENERATION_NOT_READY" // generation isn't switched on until BE-07
   | "INTERNAL_ERROR";
 
 export type FieldErrors = Record<string, string[] | undefined>;

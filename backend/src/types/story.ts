@@ -105,18 +105,108 @@ export const EMPTY_STORY: StoryState = {
   childId: null,
 };
 
-// What the client may send in PATCH /stories/:id. BE-08 reworks this with the mode rules.
-// - omit: the server controls these three. childId is fixed at creation,
-//   confirmedByChild is set by "I'm done!", storyGeneratedAt by story generation.
-// - partial: send only the fields that changed.
-// - strict: an unknown field (a typo, or one of the omitted ones) is a 400,
-//   not silently dropped, so mistakes show up right away.
-export const StoryPatchSchema = StoryStateSchema.omit({
-  childId: true,
-  confirmedByChild: true,
-  storyGeneratedAt: true,
-})
+// ---- The wizard's answer options (guide BE-08) --------------------------------------
+// Copied from the frontend's src/data/content.ts. The ids must match exactly: if a list
+// there changes, change it here too. The server only accepts these ids, so a direct API
+// caller can't save an answer the wizard could never show.
+
+export const ACTS = [1, 2, 3] as const;
+export type Act = (typeof ACTS)[number];
+
+// "What makes your hero special": a different list per mode.
+export const STRENGTHS: Record<Mode, readonly string[]> = {
+  junior: ["big-curiosity", "kind-heart", "clever-inventions", "super-focus", "creative-vision", "brave-courage"],
+  senior: ["curious", "empathetic", "inventive", "focused", "imaginative", "resilient"],
+};
+
+export const TOOLS = ["wheelchair", "headphones", "fidget-toy", "white-cane", "hearing-aid", "glasses"] as const;
+
+// Act 3 reuses the Act 1 obstacles, as in the frontend.
+const OBSTACLES_FIRST = ["grumpy-giant", "roaring-fire", "humming-mist", "messy-blueprint"] as const;
+export const OBSTACLES: Record<Act, readonly string[]> = {
+  1: OBSTACLES_FIRST,
+  2: ["mean-whispers", "thundering-cloud", "glass-wall", "mean-shadow"],
+  3: OBSTACLES_FIRST,
+};
+
+const FEELINGS_ALL = ["foggy", "heavy", "jumpy", "thumpy", "fluttery", "steady"] as const;
+// Creator mode, final act: a wider set of feelings.
+const FEELINGS_CREATOR_FINAL = ["clouded", "weighed-down", "on-edge", "burning", "exposed", "shut-out", "stuck", "steady"] as const;
+export function feelingsFor(mode: Mode, act: Act): readonly string[] {
+  return mode === "senior" && act === 3 ? FEELINGS_CREATOR_FINAL : FEELINGS_ALL;
+}
+
+// Act 3 reuses the Act 1 brave moves, as in the frontend.
+const MOVES_GROUNDING = ["shrink-the-giant", "find-first-step", "ask-for-help", "deep-breaths"] as const;
+export const BRAVE_MOVES: Record<Act, readonly string[]> = {
+  1: MOVES_GROUNDING,
+  2: ["lead-the-way", "try-something-new", "stand-my-ground", "calm-honesty"],
+  3: MOVES_GROUNDING,
+};
+
+// The StoryState field names for each act.
+export const ACT_FIELDS = {
+  1: { obstacles: "obstacles", feeling: "heartColor", move: "braveMove", words: "heroWords" },
+  2: { obstacles: "obstacles2", feeling: "heartColor2", move: "braveMove2", words: "heroWords2" },
+  3: { obstacles: "obstacles3", feeling: "heartColor3", move: "braveMove3", words: "heroWords3" },
+} as const;
+
+// Cleared when the child picks two acts at the Challenge Gate (guide BE-08).
+export const THIRD_ACT_FIELDS = ["obstacles3", "heartColor3", "braveMove3", "heroWords3", "thirdChallengeText"] as const;
+
+// ---- What the client may send in PATCH /stories/:id (guide BE-08) ---------------------
+// - Only the fields that changed (all optional), at least one.
+// - The server controls childId (fixed at creation), confirmedByChild ("I'm done!", BE-12),
+//   storyGeneratedAt (generation, BE-10), status, mode and storyPath (set from the
+//   Challenge Gate answer). Sending any of them, or any unknown field, is a 400.
+// - Here each answer must be a REAL option id from some mode. Whether it is allowed for
+//   THIS story's mode is checked afterwards in services/storyRules.ts, because the mode
+//   lives on the story, not in the request.
+
+const unique = (values: string[]) => new Set(values).size === values.length;
+// A pick list: real ids only, no repeats, at most `max`.
+const picks = (ids: readonly string[], max: number) =>
+  z.array(z.enum(ids as [string, ...string[]])).max(max).refine(unique, "Each choice can be picked only once");
+// A single pick, or "" for "not chosen yet" (the frontend's empty value).
+const pick = (ids: readonly string[]) => z.union([z.literal(""), z.enum(ids as [string, ...string[]])]);
+
+const ALL_STRENGTHS = [...STRENGTHS.junior, ...STRENGTHS.senior];
+const ALL_FEELINGS = [...new Set([...FEELINGS_ALL, ...FEELINGS_CREATOR_FINAL])];
+const words = z.string().max(500);
+
+export const StoryPatchSchema = z
+  .object({
+    authorName: shortText,
+    selectedFormat: z.enum(FORMATS).nullable(),
+    comicVibe: z.enum(ART_STYLES).nullable(),
+    heroType: z.enum(HERO_TYPES).nullable(),
+    charName: shortText,
+    // Only "he" or "she". "they" is a 400 (guide BE-08).
+    heroPronoun: z.enum(PRONOUNS).nullable(),
+    charStrengths: picks(ALL_STRENGTHS, 3),
+    selfLove: text,
+    charTools: picks(TOOLS, TOOLS.length),
+    aspiration: text,
+    obstacles: picks(OBSTACLES[1], 4),
+    heartColor: pick(ALL_FEELINGS),
+    braveMove: pick(BRAVE_MOVES[1]),
+    heroWords: words,
+    safePlaceText: text,
+    obstacles2: picks(OBSTACLES[2], 4),
+    heartColor2: pick(ALL_FEELINGS),
+    braveMove2: pick(BRAVE_MOVES[2]),
+    heroWords2: words,
+    facesChallenge3: z.boolean().nullable(),
+    obstacles3: picks(OBSTACLES[3], 4),
+    heartColor3: pick(ALL_FEELINGS),
+    braveMove3: pick(BRAVE_MOVES[3]),
+    heroWords3: words,
+    // Fields the guide adds to StoryState.
+    oneMoreAmazingThing: z.string().max(500),
+    thirdChallengeText: text,
+  })
   .partial()
-  .strict();
+  .strict()
+  .refine((body) => Object.keys(body).length > 0, { message: "Send at least one field to save" });
 
 export type StoryPatch = z.infer<typeof StoryPatchSchema>;

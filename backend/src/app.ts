@@ -8,6 +8,7 @@ import { createAuthRouter } from "./routes/auth.js";
 import { createChildSessionRouter } from "./routes/childSession.js";
 import { createChildrenRouter } from "./routes/children.js";
 import { createFacilitatorRouter } from "./routes/facilitator.js";
+import { createStoriesRouter } from "./routes/stories.js";
 import { healthRouter } from "./routes/health.js";
 
 export function createApp() {
@@ -35,6 +36,7 @@ export function createApp() {
   api.use("/auth/child-session", createChildSessionRouter());
   api.use("/auth", createAuthRouter());
   api.use("/children", createChildrenRouter());
+  api.use("/stories", createStoriesRouter());
   api.use("/facilitator", createFacilitatorRouter());
   api.use("/admin", createAdminRouter());
 
