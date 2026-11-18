@@ -7,7 +7,9 @@ import { Flipbook } from "@/components/Flipbook";
 import { pageText } from "@/data/storyText";
 import { Arrow, Button, Card, Heading, LinkButton, Subtle } from "@/components/ui";
 import { heroAvatar } from "@/data/assets";
-import { useAppState } from "@/state/AppState";
+import { inPreviewMode, useAppState } from "@/state/AppState";
+import { ApiError } from "@/lib/api";
+import { generateStory, routeForStep } from "@/lib/stories";
 import { possessive } from "@/lib/text";
 import { ROUTES } from "@/lib/routes";
 
@@ -21,17 +23,47 @@ const GEN_STEPS: { label: string; until: number; status: (page: number) => strin
   { label: "Putting your book together", until: 100, status: () => "Binding the pages…" },
 ];
 
-// No generation backend: this screen only animates, then moves on.
-// When a real backend exists, drive `progress` from its updates instead of the timer.
+// First the server checks the draft is complete (backend BE-08): if a step is missing, the
+// child goes straight back to it, so the book never shows empty pages.
+// The job queue that really makes the story comes in BE-07; until then the server answers
+// GENERATION_NOT_READY and this screen only animates, then moves on. When BE-07 lands,
+// drive `progress` from the status endpoint instead of the timer.
 export function GeneratingScreen() {
   const [, navigate] = useLocation();
-  const { story, updateStory } = useAppState();
+  const { story, updateStory, storyId, flushStory } = useAppState();
   const [progress, setProgress] = useState(0);
+  const [checked, setChecked] = useState(false);
 
   useEffect(() => {
+    if (inPreviewMode() || !storyId) {
+      setChecked(true);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        await flushStory();
+        await generateStory(storyId);
+      } catch (err) {
+        const missing = err instanceof ApiError && err.code === "STORY_INCOMPLETE" ? err.fields.missingSteps : undefined;
+        if (!cancelled && missing?.length) {
+          navigate(routeForStep(missing[0]), { replace: true });
+          return;
+        }
+        // GENERATION_NOT_READY (no queue yet) or no connection: keep the demo going.
+      }
+      if (!cancelled) setChecked(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!checked) return;
     const id = setInterval(() => setProgress((p) => Math.min(p + 4, 100)), 120);
     return () => clearInterval(id);
-  }, []);
+  }, [checked]);
 
   useEffect(() => {
     if (progress < 100) return;

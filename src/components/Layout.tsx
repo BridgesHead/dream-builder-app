@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { Sparkles, Wand2 } from "lucide-react";
 import { CHAPTERS } from "@/data/content";
-import { EMPTY_STORY, useAppState } from "@/state/AppState";
+import { useAppState } from "@/state/AppState";
 import { logout } from "@/lib/auth";
 import { ROUTES } from "@/lib/routes";
 import { cx } from "@/lib/text";
@@ -65,7 +65,7 @@ export type ChapterRef = number | "final" | { label: string };
 /** Parent pages: signed-in email + sign out. */
 function ParentMenu() {
   const [path, navigate] = useLocation();
-  const { parent, updateParent, updateStory } = useAppState();
+  const { parent, updateParent, clearStory } = useAppState();
   if (!parent.account) return null;
   return (
     <div className="flex items-center gap-3 text-xs text-ink-muted">
@@ -83,8 +83,8 @@ function ParentMenu() {
           void logout()
             .catch(() => undefined)
             .finally(() => {
-              updateParent({ account: null, activeChildId: null, order: null });
-              updateStory(EMPTY_STORY);
+              updateParent({ account: null, activeChildId: null, order: null, holder: null });
+              clearStory();
               navigate(ROUTES.login);
             });
         }}

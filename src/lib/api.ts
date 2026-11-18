@@ -85,20 +85,21 @@ let refreshing: Promise<boolean> | null = null;
 
 /**
  * Gets a new access token using the refresh cookie.
- * Returns { user } if still logged in, null if not (no cookie, or the session ended).
+ * Returns who holds this device if still logged in: { kind: "parent", user } or, after a
+ * handover, { kind: "child", child }. null if not (no cookie, or the session ended).
  * Throws ApiError if the server can't be reached or is broken, so a server outage is never
  * mistaken for "logged out".
  */
-export async function refreshAccessToken(): Promise<{ user: unknown } | null> {
+export async function refreshAccessToken(): Promise<{ kind: "parent"; user: unknown } | { kind: "child"; child: unknown } | null> {
   const res = await send("/auth/refresh", { method: "POST" });
   if (res.status >= 500) throw await toError(res);
   if (!res.ok) {
     accessToken = null;
     return null;
   }
-  const data = (await res.json()) as { user: unknown; accessToken: string };
+  const data = (await res.json()) as { kind?: string; user?: unknown; child?: unknown; accessToken: string };
   accessToken = data.accessToken;
-  return { user: data.user };
+  return data.kind === "child" ? { kind: "child", child: data.child } : { kind: "parent", user: data.user };
 }
 
 export async function api<T = unknown>(path: string, options: ApiOptions = {}): Promise<T> {

@@ -48,17 +48,17 @@ const filled = (value: string | null | undefined) => !!value && value.trim().len
 // Sami Bhai to confirm the PRD's exact list.
 export function modeProblems(mode: Mode, patch: StoryPatch): FieldErrors {
   const problems: FieldErrors = {};
-  const label = mode === "junior" ? "Explorer" : "Creator";
+  const label = mode === "junior" ? "an Explorer" : "a Creator";
 
   const wrongStrengths = (patch.charStrengths ?? []).filter((s) => !STRENGTHS[mode].includes(s));
   if (wrongStrengths.length > 0) {
-    problems.charStrengths = [`Not a ${label} strength: ${wrongStrengths.join(", ")}`];
+    problems.charStrengths = [`Not ${label} strength: ${wrongStrengths.join(", ")}`];
   }
   for (const act of ACTS) {
     const field = ACT_FIELDS[act].feeling;
     const feeling = patch[field];
     if (feeling && !feelingsFor(mode, act).includes(feeling)) {
-      problems[field] = [`Not a ${label} feeling for act ${act}: ${feeling}`];
+      problems[field] = [`Not ${label} feeling for act ${act}: ${feeling}`];
     }
   }
   return problems;

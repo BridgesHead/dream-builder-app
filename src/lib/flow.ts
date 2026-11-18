@@ -1,4 +1,4 @@
-import type { Mode, ParentState, StoryState } from "@/state/AppState";
+import type { DeviceHolder, Mode, ParentState, StoryState } from "@/state/AppState";
 import { ROUTES } from "./routes";
 
 export interface FlowStep {
@@ -51,9 +51,21 @@ export function storyFlow(story: StoryState, mode: Mode): FlowStep[] {
 
 /**
  * Where the visitor should be sent instead of `path`, or null if they may stay.
- * Enforces: account → child profile → story steps in order → parent checkout.
+ * Enforces: account → child profile → handover → story steps in order → parent checkout.
+ * After a handover the child holds the device: parent pages need the parent's password
+ * first (the ask-a-parent screen), because the server refuses them a child session anyway.
  */
-export function redirectFor(path: string, story: StoryState, parent: ParentState, mode: Mode): string | null {
+export function redirectFor(path: string, story: StoryState, parent: ParentState, mode: Mode, storyId: string | null): string | null {
+  const holder: DeviceHolder = parent.holder ?? (parent.account ? "parent" : null);
+  if (path === ROUTES.askParent) return holder === "child" ? null : ROUTES.dashboard;
+  const childPage = path === ROUTES.start || path === ROUTES.library || path.startsWith("/story/");
+  if (holder === "child" && !childPage) {
+    // Email links still work for whoever opened them; everything else is for grown-ups.
+    const linkPages: string[] = [ROUTES.verifyEmail, ROUTES.forgotPassword, ROUTES.resetPassword];
+    return linkPages.includes(path) ? null : `${ROUTES.askParent}?next=${encodeURIComponent(path)}`;
+  }
+  if (holder === "child") return storyRedirect(path, story, mode, storyId);
+
   // Opened from email links: they work whether or not this browser is logged in.
   const linkPages: string[] = [ROUTES.verifyEmail, ROUTES.forgotPassword, ROUTES.resetPassword];
   if (linkPages.includes(path)) return null;
@@ -66,22 +78,28 @@ export function redirectFor(path: string, story: StoryState, parent: ParentState
   if (parentSetup.includes(path)) return null;
   if (!parent.activeChildId) return ROUTES.children;
 
-  const startPages: string[] = [ROUTES.start, ROUTES.library, ROUTES.handover];
-  if (startPages.includes(path)) return null;
+  if (path === ROUTES.handover) return null;
+  // The story pages need a child session: the parent hands the device over first
+  // (from the dashboard or the children screen).
+  if (childPage) return ROUTES.dashboard;
 
+  // Parent review & checkout need the child's confirmed story.
+  if (!story.confirmedByChild) return ROUTES.dashboard;
+  if (path === ROUTES.success && !parent.order) return ROUTES.plans;
+  return null;
+}
+
+/** For the child holding the device: the story steps in order. */
+function storyRedirect(path: string, story: StoryState, mode: Mode, storyId: string | null): string | null {
+  if (path === ROUTES.start || path === ROUTES.library) return null;
+  // Every answer is saved to a draft on the server: start (or open) one first.
+  if (!storyId) return ROUTES.start;
   const flow = storyFlow(story, mode);
   const firstOpen = flow.find((s) => !s.done)?.path ?? null;
 
-  if (path.startsWith("/story/")) {
-    const index = flow.findIndex((s) => s.path === path);
-    // Unknown step for this mode (e.g. an Explorer opening a Creator screen).
-    if (index === -1) return firstOpen ?? ROUTES.book;
-    const blocker = flow.slice(0, index).find((s) => !s.done);
-    return blocker ? blocker.path : null;
-  }
-
-  // Parent review & checkout need the child's confirmed story.
-  if (!story.confirmedByChild) return firstOpen ?? ROUTES.book;
-  if (path === ROUTES.success && !parent.order) return ROUTES.plans;
-  return null;
+  const index = flow.findIndex((s) => s.path === path);
+  // Unknown step for this mode (e.g. an Explorer opening a Creator screen).
+  if (index === -1) return firstOpen ?? ROUTES.book;
+  const blocker = flow.slice(0, index).find((s) => !s.done);
+  return blocker ? blocker.path : null;
 }

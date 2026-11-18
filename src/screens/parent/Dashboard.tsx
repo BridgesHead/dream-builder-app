@@ -4,7 +4,8 @@ import { Plus } from "lucide-react";
 import { AppShell } from "@/components/Layout";
 import { Arrow, Button, Card, Subtle } from "@/components/ui";
 import { CURRENCY, PLANS } from "@/data/content";
-import { modeForAge, useAppState, type ChildProfile } from "@/state/AppState";
+import { modeOf, useAppState, type ChildProfile } from "@/state/AppState";
+import { useServerChildren } from "@/screens/parent/Children";
 import { cx, possessive } from "@/lib/text";
 import { ROUTES } from "@/lib/routes";
 import { resumePoint } from "@/screens/story/Start";
@@ -29,7 +30,7 @@ function Pill({ tone, children }: { tone: Tone; children: ReactNode }) {
 /** Joins non-empty parts with the Figma " • " separator. */
 const meta = (...parts: (string | false | null | undefined)[]) => parts.filter(Boolean).join("  •  ");
 
-const modeLabel = (age: number) => (modeForAge(age) === "junior" ? "Explorer Mode" : "Creator Mode");
+const modeLabel = (child: ChildProfile) => (modeOf(child) === "junior" ? "Explorer Mode" : "Creator Mode");
 
 function finishedLabel(iso: string | null): string | null {
   if (!iso) return null;
@@ -79,7 +80,9 @@ export function DashboardScreen() {
 
   const firstName = parent.account?.name.trim().split(/\s+/)[0] ?? "";
   const author = parent.children.find((c) => c.id === (story.childId ?? parent.activeChildId)) ?? null;
-  const authorMode = author ? modeForAge(author.age) : "junior";
+  const authorMode = author ? modeOf(author) : "junior";
+  // The children come from the server (backend BE-04).
+  useServerChildren();
   const hasStory = !!story.heroType && !!author;
   const storyTitle = `${possessive(heroName)} Magical Journey`;
   const finished = finishedLabel(story.storyGeneratedAt);
@@ -120,7 +123,7 @@ export function DashboardScreen() {
                       <span className="block truncate font-display text-[22px] font-semibold text-ink">{child.name}</span>
                       {/* Phones drop the word "Mode" so the line fits the 250px swipe card. */}
                       <span className="block text-sm text-ink-muted">
-                        {meta(`${child.age} years`, modeLabel(child.age).replace(" Mode", ""))}
+                        {meta(`${child.age} years`, modeLabel(child).replace(" Mode", ""))}
                         <span className="hidden sm:inline"> Mode</span>
                       </span>
                     </span>
@@ -147,7 +150,7 @@ export function DashboardScreen() {
 
         {waitingForReview && author && (
           <Section title="Stories waiting for review" badge="1 waiting" highlight>
-            <Row title={storyTitle} detail={meta(`By ${author.name}`, modeLabel(author.age), finished)}>
+            <Row title={storyTitle} detail={meta(`By ${author.name}`, modeLabel(author), finished)}>
               <Button className="w-full sm:w-auto" onClick={() => asChild(author, ROUTES.review)}>
                 Review Story <Arrow />
               </Button>

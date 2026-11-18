@@ -152,7 +152,7 @@ export function SignupScreen() {
     if (!canSubmit) return;
     void run(async () => {
       const user = await auth.register({ name: name.trim(), email, password, adultConfirmed: isAdult, consent });
-      updateParent({ account: { name: user.name, email: user.email, emailVerified: user.emailVerified } });
+      updateParent({ holder: "parent", account: { name: user.name, email: user.email, emailVerified: user.emailVerified } });
       // Next: "check your inbox", then child setup.
       navigate(ROUTES.verifyEmail);
     });
@@ -203,7 +203,7 @@ export function LoginScreen() {
     if (!canSubmit) return;
     void run(async () => {
       const user = await auth.login(email, password, remember);
-      updateParent({ account: { name: user.name, email: user.email, emailVerified: user.emailVerified } });
+      updateParent({ holder: "parent", account: { name: user.name, email: user.email, emailVerified: user.emailVerified } });
       // Returning parents land on the dashboard; new accounts go through child setup.
       navigate(ROUTES.dashboard);
     });
@@ -385,7 +385,7 @@ export function ResetPasswordScreen() {
     void run(async () => {
       await auth.resetPassword(token, password);
       // The server logged out every device, so forget the local login too.
-      updateParent({ account: null, activeChildId: null, order: null });
+      updateParent({ account: null, activeChildId: null, order: null, holder: null });
       setDone(true);
     });
   };
@@ -430,6 +430,52 @@ export function ResetPasswordScreen() {
           </Button>
         </>
       )}
+    </AuthFrame>
+  );
+}
+
+/**
+ * /ask-parent?next=...  The child holds the device (after a handover) and something needs a
+ * grown-up. The parent types their password; the child session ends and the parent's begins
+ * (backend BE-04). A wrong password 10 times in 15 minutes is blocked for a while.
+ */
+export function AskParentScreen() {
+  const [, navigate] = useLocation();
+  const next = new URLSearchParams(useSearch()).get("next");
+  const { activeChild, updateParent, flushStory } = useAppState();
+  const [password, setPassword] = useState("");
+  const { busy, error, run } = useAction();
+
+  // Only our own pages: a path like "/parent/review", never another website.
+  const target = next && next.startsWith("/") && !next.startsWith("//") ? next : ROUTES.dashboard;
+  const canSubmit = !!password && !busy;
+  const submit = () => {
+    if (!canSubmit) return;
+    void run(async () => {
+      // Save the child's last answers while the child session is still open.
+      await flushStory();
+      const user = await auth.exitChildSession(password);
+      updateParent({ holder: "parent", account: { name: user.name, email: user.email, emailVerified: user.emailVerified } });
+      navigate(target, { replace: true });
+    });
+  };
+
+  return (
+    <AuthFrame title="Grown-up needed">
+      <p className="-mt-3 mb-5 text-center text-sm text-ink-muted">
+        {activeChild ? `${activeChild.name} is using Dream Builder.` : "A child is using Dream Builder."} To open the parent
+        area, enter the parent's password.
+      </p>
+      <ErrorNote error={error && error.code === "INVALID_CREDENTIALS" ? new ApiError("That password isn't right.", 401, error.code) : error} />
+      <PasswordField value={password} onChange={setPassword} onEnter={submit} />
+      <Button className="mt-2 w-full" disabled={!canSubmit} onClick={submit}>
+        {busy ? "Checking…" : "Continue as parent"} <Arrow />
+      </Button>
+      <p className="mt-5 text-center text-xs text-ink-muted">
+        <Link href={ROUTES.start} className="font-bold text-ink underline">
+          Back to my story
+        </Link>
+      </p>
     </AuthFrame>
   );
 }

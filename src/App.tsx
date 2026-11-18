@@ -3,7 +3,7 @@ import { Link, Redirect, Route, Switch, useLocation } from "wouter";
 import { AppStateProvider, useAppState } from "@/state/AppState";
 import { redirectFor } from "@/lib/flow";
 import { ROUTES } from "@/lib/routes";
-import { ForgotPasswordScreen, LoginScreen, ResetPasswordScreen, SignupScreen, VerifyEmailScreen } from "@/screens/parent/Auth";
+import { AskParentScreen, ForgotPasswordScreen, LoginScreen, ResetPasswordScreen, SignupScreen, VerifyEmailScreen } from "@/screens/parent/Auth";
 import { AddChildScreen, ChildrenScreen, HandoverScreen } from "@/screens/parent/Children";
 import { DashboardScreen } from "@/screens/parent/Dashboard";
 import { ReviewScreen } from "@/screens/parent/Review";
@@ -19,7 +19,7 @@ import { AssetChecklist } from "@/screens/AssetChecklist";
 /** Keeps visitors on the website's path: sign up → child setup → story steps in order → checkout. */
 function FlowGuard({ children }: { children: ReactNode }) {
   const [path] = useLocation();
-  const { story, parent, mode } = useAppState();
+  const { story, parent, mode, storyId, saveProblem } = useAppState();
   const [preview, setPreview] = useState(isPreview);
 
   useEffect(() => {
@@ -58,8 +58,19 @@ function FlowGuard({ children }: { children: ReactNode }) {
       </>
     );
   }
-  const target = redirectFor(path, story, parent, mode);
-  return target && target !== path ? <Redirect to={target} replace /> : <>{children}</>;
+  const target = redirectFor(path, story, parent, mode, storyId);
+  if (target && target.split("?")[0] !== path) return <Redirect to={target} replace />;
+  return (
+    <>
+      {children}
+      {/* The story is saved to the server in the background; say so if that's failing. */}
+      {saveProblem && path.startsWith("/story/") && (
+        <div role="status" className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-full bg-amber-100 px-4 py-2 text-xs font-bold text-amber-900 shadow-card">
+          {saveProblem}
+        </div>
+      )}
+    </>
+  );
 }
 
 const PREVIEW_KEY = "dreamBuilder.preview";
@@ -97,6 +108,7 @@ export function App() {
         <Route path={ROUTES.children} component={ChildrenScreen} />
         <Route path={ROUTES.addChild} component={AddChildScreen} />
         <Route path={ROUTES.handover} component={HandoverScreen} />
+        <Route path={ROUTES.askParent} component={AskParentScreen} />
         <Route path={ROUTES.author} component={AuthorScreen} />
         <Route path={ROUTES.format} component={FormatScreen} />
         <Route path={ROUTES.style} component={StyleScreen} />

@@ -1,6 +1,7 @@
 // The account calls to the Dream Builder API (backend BE-03). Screens use these instead of
 // calling api() directly, so the access token is always stored and cleared in one place.
 import { api, refreshAccessToken, setAccessToken } from "./api";
+import type { ServerChild } from "./children";
 
 /** The parent as the server describes them. */
 export interface AuthUser {
@@ -43,17 +44,41 @@ export async function logout(): Promise<void> {
   }
 }
 
+/** Who holds this device, as the server sees it. */
+export type DeviceSession = { kind: "parent"; user: AuthUser } | { kind: "child"; child: ServerChild };
+
 /**
- * Called when the app opens: is the parent still logged in (valid refresh cookie)?
- * Returns the user, null if not logged in, or "offline" if the server can't be reached.
+ * Called when the app opens: is anyone still logged in on this device (valid refresh cookie)?
+ * Returns the parent or, after a handover, the child; null if nobody; "offline" if the
+ * server can't be reached.
  */
-export async function restoreSession(): Promise<AuthUser | null | "offline"> {
+export async function restoreSession(): Promise<DeviceSession | null | "offline"> {
   try {
     const res = await refreshAccessToken();
-    return res ? (res.user as AuthUser) : null;
+    if (!res) return null;
+    return res.kind === "child" ? { kind: "child", child: res.child as ServerChild } : { kind: "parent", user: res.user as AuthUser };
   } catch {
     return "offline";
   }
+}
+
+// ---- Handing the device to a child, and back (backend BE-04) ----
+
+/**
+ * The parent hands the device to a child. The parent's session on this device ends and a
+ * child session starts: from now on the API only lets this child reach their own stories.
+ */
+export async function startChildSession(childId: string): Promise<ServerChild> {
+  const res = await api<{ child: ServerChild; accessToken: string }>("/auth/child-session", { method: "POST", body: { childId } });
+  setAccessToken(res.accessToken);
+  return res.child;
+}
+
+/** A grown-up types the parent's password to leave the child session. */
+export async function exitChildSession(password: string): Promise<AuthUser> {
+  const res = await api<SessionResponse>("/auth/child-session/exit", { method: "POST", body: { password } });
+  setAccessToken(res.accessToken);
+  return res.user;
 }
 
 export function verifyEmail(token: string): Promise<void> {

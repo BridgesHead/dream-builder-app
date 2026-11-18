@@ -21,6 +21,8 @@ export const ROUTES = {
   children: "/parent/children",
   addChild: "/parent/children/new",
   handover: "/parent/handover",
+  // A grown-up types the parent's password to leave a child session.
+  askParent: "/ask-parent",
   author: "/story/author",
   format: "/story/format",
   style: "/story/style",
