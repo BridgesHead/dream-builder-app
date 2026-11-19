@@ -72,6 +72,17 @@ describe("R4 Authentic child voice (Act 3)", () => {
     const result = runOn((d) => (panel(d, 13).text = 'Ember said again, "I can keep going one step at a time," and breathed slowly.'));
     expect(result.rewrite).toEqual([expect.objectContaining({ rule: "R4", panelNumber: 13 })]);
   });
+  it("the hero's own name in Panel 13 is not copying, even if the child's words are just that name", () => {
+    // Found in a dev test: hero "pip", Act 3 words "pip". Panel 13 always names the hero, so
+    // the old check could never pass and generation failed every try.
+    const result = runOn(() => undefined, { ...EMBER_ANSWERS, heroWords3: "Ember" });
+    expect(result.rewrite.filter((f) => f.rule === "R4")).toEqual([]);
+  });
+  it("matches whole words only: 'pip' is not found inside 'pipe'", () => {
+    const pip = { ...EMBER_ANSWERS, heroWords3: "pipe" };
+    const result = runOn((d) => (panel(d, 13).text = "Ember followed the old pip of light, breathing slowly, until a way through appeared."), pip);
+    expect(result.rewrite.filter((f) => f.rule === "R4")).toEqual([]);
+  });
 });
 
 describe("R5 Inner voice format", () => {

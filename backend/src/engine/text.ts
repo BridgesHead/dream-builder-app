@@ -15,10 +15,14 @@ export function comparable(s: string): string {
   return straightQuotes(s).replace(/\s+/g, " ").trim().replace(/[.!?,;:]+$/, "").toLowerCase();
 }
 
-/** Does `text` contain the child's `words` word for word (ignoring case and end punctuation)? */
+/**
+ * Does `text` contain the child's `words` word for word (ignoring case and end punctuation)?
+ * Whole words only: "pip" is found in "Pip ran" but not in "a pipe".
+ */
 export function containsVerbatim(text: string, words: string): boolean {
   const target = comparable(words);
-  return target.length > 0 && comparable(text).includes(target);
+  if (target.length === 0) return false;
+  return new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegex(target)}(?![\\p{L}\\p{N}])`, "u").test(comparable(text));
 }
 
 export function escapeRegex(s: string): string {

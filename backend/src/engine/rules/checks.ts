@@ -94,11 +94,14 @@ export const checkEarnedSuccess: Check = (panels, ctx) =>
   });
 
 // R4: the Final Pivot echoes the child's Act 3 words in prose only, never word for word.
+// The hero's own name doesn't count as copying (a child may type just the name, e.g. "Pip").
 export const checkFinalPivotEcho: Check = (panels, ctx) => {
   const words = ctx.heroWords[3];
   if (!words) return [];
+  const name = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegex(ctx.heroName)}(?![\\p{L}\\p{N}])`, "giu");
+  const withoutName = (text: string) => (ctx.heroName ? text.replace(name, " ") : text);
   return byRole(panels, "pivot3")
-    .filter((p) => containsVerbatim(p.text, words))
+    .filter((p) => containsVerbatim(withoutName(p.text), withoutName(words)))
     .map((p) => finding("R4", p.number, "Must echo the child's Act 3 words in its own words, not repeat them"));
 };
 

@@ -411,9 +411,22 @@ export function BookScreen() {
           notes={notes}
           imageFor={(p) => serverPanel(p)?.imageUrl}
           endAction={
-            <Button className="h-11 shrink-0 px-5" disabled={busy !== null || locked} onClick={() => void finish()}>
-              {busy === "submitting" ? "Sending…" : "I'm Done!"} <Arrow />
-            </Button>
+            locked ? (
+              // Already sent to a parent (or approved): the next step is the parent's.
+              <Button
+                className="h-11 shrink-0 px-5"
+                onClick={() => {
+                  updateStory({ confirmedByChild: true });
+                  navigate(ROUTES.done);
+                }}
+              >
+                Ask a Parent to Continue <Arrow />
+              </Button>
+            ) : (
+              <Button className="h-11 shrink-0 px-5" disabled={busy !== null} onClick={() => void finish()}>
+                {busy === "submitting" ? "Sending…" : "I'm Done!"} <Arrow />
+              </Button>
+            )
           }
         />
 

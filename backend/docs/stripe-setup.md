@@ -42,8 +42,10 @@ unzip it, and run `stripe.exe login`.
 Leave this running in its own terminal while you test:
 
 ```bash
-stripe listen --forward-to localhost:3000/api/v1/payments/stripe/webhook
+stripe listen --events checkout.session.completed,checkout.session.async_payment_succeeded,checkout.session.async_payment_failed,checkout.session.expired --forward-to localhost:3000/api/v1/payments/stripe/webhook
 ```
+
+Newer Stripe CLI versions (1.55+) need `--events`: these are the four events our webhook uses.
 
 It prints `Your webhook signing secret is whsec_…`. Put that in `.env` as
 `STRIPE_WEBHOOK_SECRET`, then restart the API (`pnpm dev`). The secret stays the same each time
