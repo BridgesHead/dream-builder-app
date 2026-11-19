@@ -31,6 +31,9 @@ export const AUDIT_ACTIONS = [
   "story.submit", //           child_review → parent_review ("I'm done!")
   "story.request_changes", //  parent_review → child_review
   "story.approve", //          parent_review → approved
+  // Orders (BE-17)
+  "order.create", //   the parent started checkout
+  "order.paid", //     Stripe confirmed the payment (the webhook)
   "user.create",
   "user.role_change",
   "facilitator.link",
@@ -43,7 +46,7 @@ export interface AuditEntry {
   actorId: string | null;
   actorRole: "parent" | "child_session" | "facilitator" | "admin" | "system";
   action: AuditAction;
-  targetType: "user" | "consent" | "child" | "story" | "facilitator_link";
+  targetType: "user" | "consent" | "child" | "story" | "facilitator_link" | "order";
   targetId: string;
   ipAddress?: string | null;
 }

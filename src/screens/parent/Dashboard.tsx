@@ -86,7 +86,9 @@ export function DashboardScreen() {
   const hasStory = !!story.heroType && !!author;
   const storyTitle = `${possessive(heroName)} Magical Journey`;
   const finished = finishedLabel(story.storyGeneratedAt);
-  const waitingForReview = hasStory && story.confirmedByChild && !parent.order;
+  // Only a PAID order counts (an unpaid checkout, backend BE-17, isn't an order yet).
+  const order = parent.order && (parent.order.paymentStatus ?? "paid") === "paid" ? parent.order : null;
+  const waitingForReview = hasStory && story.confirmedByChild && !order;
   const inProgress = hasStory && !story.confirmedByChild;
 
   const asChild = (child: ChildProfile, route: string) => {
@@ -94,7 +96,6 @@ export function DashboardScreen() {
     navigate(route);
   };
 
-  const order = parent.order;
   const plan = order ? PLANS.find((p) => p.id === order.plan) : undefined;
   const digital = order?.plan === "digital";
 
@@ -194,7 +195,7 @@ export function DashboardScreen() {
 
         {order && plan && author && (
           <Section title="Orders">
-            <Row title={storyTitle} detail={meta(`Order ${order.orderNumber}`, plan.title, `${CURRENCY}${order.amount.toLocaleString()}`, `By ${author.name}`)}>
+            <Row title={storyTitle} detail={meta(`Order ${order.orderNumber}`, plan.title, `${CURRENCY} ${order.amount.toLocaleString()}`, `By ${author.name}`)}>
               <Pill tone={digital ? "green" : "amber"}>{digital ? "Ready to download" : "Being prepared"}</Pill>
               <TextLink onClick={() => asChild(author, ROUTES.success)}>{digital ? "Download" : "View Order"}</TextLink>
             </Row>

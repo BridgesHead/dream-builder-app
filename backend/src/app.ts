@@ -9,6 +9,8 @@ import { createChildSessionRouter } from "./routes/childSession.js";
 import { createChildrenRouter } from "./routes/children.js";
 import { createFacilitatorRouter } from "./routes/facilitator.js";
 import { createMediaRouter } from "./routes/media.js";
+import { createOrdersRouter } from "./routes/orders.js";
+import { createPaymentsRouter } from "./routes/payments.js";
 import { getStorage } from "./lib/storage.js";
 import { createStoriesRouter } from "./routes/stories.js";
 import { healthRouter } from "./routes/health.js";
@@ -23,6 +25,9 @@ export function createApp() {
 
   // First, so every request gets an ID and a log line, even ones that fail later.
   app.use(requestLogger);
+  // Stripe's webhook (BE-17) BEFORE the JSON parser: its signature is checked against the
+  // body exactly as Stripe sent it, so that route reads the raw bytes itself.
+  app.use("/api/v1/payments", createPaymentsRouter());
   // Parse JSON request bodies into req.body (rejects bodies over 100kb by default).
   app.use(express.json());
   // Parse the Cookie header into req.cookies (the refresh token cookie).
@@ -39,6 +44,7 @@ export function createApp() {
   api.use("/auth", createAuthRouter());
   api.use("/children", createChildrenRouter());
   api.use("/stories", createStoriesRouter());
+  api.use("/orders", createOrdersRouter());
   api.use("/facilitator", createFacilitatorRouter());
   api.use("/admin", createAdminRouter());
   // Pictures from the local storage folder, by signed link (BE-10; S3 serves its own on AWS).

@@ -71,6 +71,13 @@ const MATRIX: Entry[] = [
   { method: "post", mount: "/stories", path: "/:id/comments", rule: ["verified_parent"], callers: ["parent"] },
   { method: "post", mount: "/stories", path: "/:id/approve", rule: ["verified_parent"], callers: ["parent"] },
 
+  // BE-17 orders: parents only. The webhook is public: Stripe's signature is the permission.
+  { method: "get", mount: "/orders", path: "/prices", rule: ["verified_parent"], callers: ["parent"] },
+  { method: "post", mount: "/orders", path: "/", rule: ["verified_parent"], callers: ["parent"] },
+  { method: "get", mount: "/orders", path: "/", rule: ["verified_parent"], callers: ["parent"] },
+  { method: "get", mount: "/orders", path: "/:id", rule: ["verified_parent"], callers: ["parent"] },
+  { method: "post", mount: "/payments", path: "/stripe/webhook", rule: ["public"], callers: EVERYONE },
+
   // The signed link is the permission (an <img> tag can't send a token).
   { method: "get", mount: "/media", path: "/*key", rule: ["public"], callers: EVERYONE },
 

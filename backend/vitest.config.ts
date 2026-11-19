@@ -27,6 +27,10 @@ export default defineConfig({
       STORAGE_DIR: path.join(os.tmpdir(), "dream-builder-test-storage"),
       S3_BUCKET: "",
       FAL_KEY: "",
+      // Payments (BE-17): never the real Stripe in tests. No key = the fake Stripe; webhooks are
+      // signed with this made-up secret by the tests themselves (Stripe's own test helper).
+      STRIPE_SECRET_KEY: "",
+      STRIPE_WEBHOOK_SECRET: "whsec_test_only_secret_that_protects_nothing",
     },
     // Test files share one MongoDB; run them one after another so they don't step on each other.
     fileParallelism: false,

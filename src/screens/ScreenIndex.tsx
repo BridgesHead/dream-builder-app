@@ -106,7 +106,7 @@ export function ScreenIndex() {
         { id: "demo-maya", name: "Maya", age: 14, language: "English" },
       ],
       activeChildId: id,
-      order: { plan: "hardback", orderNumber: "DB-89241", amount: 799 },
+      order: { plan: "hardback", orderNumber: "DB-892411", amount: 149 },
     });
     updateStory({ ...DEMO_STORY, authorName: age < 12 ? "Alex Morgan" : "Maya Morgan", childId: id });
   };

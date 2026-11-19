@@ -86,7 +86,12 @@ export interface ChildProfile {
 export interface Order {
   plan: PlanId;
   orderNumber: string;
+  /** In AED. */
   amount: number;
+  /** The server's order id (backend BE-17); missing for demo data. */
+  id?: string;
+  /** Missing for demo data (counts as paid). */
+  paymentStatus?: "pending" | "paid" | "failed" | "cancelled";
 }
 
 /** Who holds this device: the parent, a child (after a handover), or nobody. */

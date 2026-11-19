@@ -89,6 +89,21 @@ const envSchema = z.object({
   // times it asks the AI before giving up. Sami Bhai confirms the real word limit.
   REWRITE_MAX_WORDS: z.coerce.number().int().min(3).max(100).default(25),
   REWRITE_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
+
+  // ---- Payments: Stripe Checkout (BE-17) ----
+  // The secret key from the Stripe dashboard (Developers → API keys). Test keys (sk_test_) on
+  // your PC, dev and staging; a live key (sk_live_) only in production. Never logged.
+  STRIPE_SECRET_KEY: unsetIfEmpty(z.string().regex(/^(sk|rk)_(test|live)_/, "must be a Stripe secret key (sk_test_… or sk_live_…)")),
+  // Checks that a webhook really came from Stripe. From "stripe listen" (your PC) or the
+  // webhook's page in the Stripe dashboard (dev, staging, production).
+  STRIPE_WEBHOOK_SECRET: unsetIfEmpty(z.string().regex(/^whsec_/, "must start with whsec_")),
+  // Prices in AED, set by Dina. NEVER taken from the browser. Placeholders until Dina confirms.
+  PRICE_DIGITAL_AED: z.coerce.number().positive().max(10_000).default(49),
+  PRICE_HARDBACK_AED: z.coerce.number().positive().max(10_000).default(149),
+  // Delivery for a hardback, added to its price (0 = included).
+  DELIVERY_HARDBACK_AED: z.coerce.number().min(0).max(10_000).default(0),
+  // How long Stripe's payment page stays open (Stripe allows 30 minutes to 24 hours).
+  CHECKOUT_EXPIRES_MINUTES: z.coerce.number().int().min(30).max(24 * 60).default(60),
 })
   .refine((env) => env.NODE_ENV !== "production" || !!env.REDIS_URL, {
     path: ["REDIS_URL"],
@@ -101,6 +116,11 @@ const envSchema = z.object({
   .refine((env) => env.AI_PROVIDER !== "fal" || !!env.FAL_KEY, {
     path: ["FAL_KEY"],
     message: 'is required when AI_PROVIDER is "fal"',
+  })
+  // Real money only in production: a live key anywhere else is a mistake.
+  .refine((env) => env.NODE_ENV === "production" || !env.STRIPE_SECRET_KEY?.includes("_live_"), {
+    path: ["STRIPE_SECRET_KEY"],
+    message: "is a LIVE key: use a test key (sk_test_…) outside production",
   });
 
 const parsed = envSchema.safeParse(process.env);
@@ -148,6 +168,14 @@ export const config = {
     backoffMs: parsed.data.JOB_BACKOFF_MS,
     textTimeoutMs: parsed.data.TEXT_JOB_TIMEOUT_MS,
     imageTimeoutMs: parsed.data.IMAGE_JOB_TIMEOUT_MS,
+  },
+  payments: {
+    stripeSecretKey: parsed.data.STRIPE_SECRET_KEY ?? null,
+    stripeWebhookSecret: parsed.data.STRIPE_WEBHOOK_SECRET ?? null,
+    // In AED, per book type. The server's prices are the only prices (BE-17).
+    prices: { digital: parsed.data.PRICE_DIGITAL_AED, hardback: parsed.data.PRICE_HARDBACK_AED },
+    delivery: { digital: 0, hardback: parsed.data.DELIVERY_HARDBACK_AED },
+    checkoutExpiresMinutes: parsed.data.CHECKOUT_EXPIRES_MINUTES,
   },
   review: {
     redrawsPerStory: parsed.data.REDRAWS_PER_STORY,

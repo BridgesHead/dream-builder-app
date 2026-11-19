@@ -39,6 +39,10 @@ export type ErrorCode =
   | "REDRAW_IN_PROGRESS" // a new picture for this page is already being drawn
   | "REDRAW_LIMIT" // this story used up its redraws (REDRAWS_PER_STORY)
   | "REWRITE_FAILED" // the AI couldn't give a sentence that keeps the rules; try again
+  // BE-17 orders and Stripe
+  | "ALREADY_BOUGHT" // this story was already bought in this format
+  | "PAYMENTS_NOT_READY" // Stripe isn't set up on this server, or couldn't be reached; try again
+  | "WEBHOOK_INVALID" // a webhook without a valid Stripe signature
   | "INTERNAL_ERROR";
 
 export type FieldErrors = Record<string, string[] | undefined>;

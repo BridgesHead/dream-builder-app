@@ -169,22 +169,24 @@ export const PANEL_LABELS = [
   "Practice Anchor",
 ];
 
-export type PlanId = "digital" | "hardback" | "softcover";
+// The book types the backend sells (BE-17). The real prices come from the server (GET /orders/prices);
+// the prices below are only shown in preview mode.
+export type PlanId = "digital" | "hardback";
 
-export const CURRENCY = "$";
+export const CURRENCY = "AED";
 
 export const PLANS: { id: PlanId; title: string; price: number; features: string[]; popular?: boolean; cta: string }[] = [
   {
     id: "digital",
     title: "Digital Storybook",
-    price: 499,
+    price: 49,
     features: ["Downloadable PDF", "Story illustrations and text", "Offline reading"],
     cta: "Choose Digital",
   },
   {
     id: "hardback",
     title: "Premium Hardback",
-    price: 799,
+    price: 149,
     popular: true,
     features: [
       "Printed hardback storybook",
@@ -193,12 +195,5 @@ export const PLANS: { id: PlanId; title: string; price: number; features: string
       "Delivery to your address",
     ],
     cta: "Choose Hardcover",
-  },
-  {
-    id: "softcover",
-    title: "Printed Softcover",
-    price: 1499,
-    features: ["Printed storybook", "Softcover binding", "Delivery to your address"],
-    cta: "Choose Soft Cover",
   },
 ];
