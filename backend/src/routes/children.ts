@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { z } from "zod";
 import { allow } from "../middleware/access.js";
+import { createDeletionRateLimits } from "../middleware/rateLimits.js";
+import * as deletion from "../services/deletion.js";
 import { validate } from "../middleware/validate.js";
 import * as children from "../services/children.js";
 import { MODES } from "../types/story.js";
@@ -14,6 +16,7 @@ const age = z.number().int().min(8).max(14);
 // As the frontend shows it, e.g. "English".
 const language = z.string().trim().min(1).max(50);
 const mode = z.enum(MODES);
+const deletionSchema = z.object({ password: z.string().min(1, "Please enter your password").max(200) }).strict();
 
 // .strict(): unknown fields (like a sneaky "parentId") are refused, not silently dropped.
 const createSchema = z.object({ name, age, language, mode: mode.optional() }).strict();
@@ -52,10 +55,21 @@ export function createChildrenRouter(): Router {
     return;
   });
 
-  // DELETE /api/v1/children/:id: a logged soft delete.
-  router.delete("/:id", parentOnly, async (req, res) => {
-    await children.removeChild(req.user!.id, String(req.params.id), req.ip);
-    res.status(204).end();
+  // ---- Deleting a child's data (BE-16) ----
+  // There is no plain DELETE any more: deleting always needs the parent's password.
+  const limits = createDeletionRateLimits();
+
+  // GET /api/v1/children/:id/deletion-preview: what will be deleted, what is kept.
+  router.get("/:id/deletion-preview", parentOnly, async (req, res) => {
+    res.json(await deletion.deletionPreview(req.user!.id, String(req.params.id)));
+    return;
+  });
+
+  // POST /api/v1/children/:id/deletion { password } → 202: the child is hidden at once, and
+  // everything is deleted in the background (GET /deletion-requests/:id shows how it's going).
+  router.post("/:id/deletion", parentOnly, limits.password, validate(deletionSchema), async (req, res) => {
+    const result = await deletion.requestDeletion({ parentId: req.user!.id, ip: req.ip ?? null }, String(req.params.id), req.body.password);
+    res.status(202).json(result);
     return;
   });
 

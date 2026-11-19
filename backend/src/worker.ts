@@ -1,7 +1,8 @@
 import { config } from "./config.js";
 import { connectToDatabase, disconnectFromDatabase } from "./db/connect.js";
 import { closeQueue, startWorker } from "./jobs/queue.js";
-import { runJob } from "./jobs/runJob.js";
+import { recoverDeletions } from "./jobs/deletionJob.js";
+import { processJob } from "./jobs/dispatch.js";
 import { logger } from "./lib/logger.js";
 import { closeRedis } from "./lib/redis.js";
 
@@ -22,7 +23,10 @@ try {
   process.exit(1);
 }
 
-const worker = startWorker(runJob);
+const worker = startWorker(processJob);
+// A deletion whose queue entry got lost (e.g. Redis was down when the parent asked) is put
+// back; running one twice is safe (BE-16).
+await recoverDeletions();
 logger.info({ concurrency: config.queue.concurrency, aiCallsPerSecond: config.queue.aiCallsPerSecond }, "Dream Builder worker started");
 
 // A polite stop: finish the jobs in hand, then close. (A crash instead leaves them locked;

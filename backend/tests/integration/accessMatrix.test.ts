@@ -51,7 +51,10 @@ const MATRIX: Entry[] = [
   { method: "post", mount: "/children", path: "/", rule: ["verified_parent"], callers: ["parent"] },
   { method: "get", mount: "/children", path: "/:id", rule: ["verified_parent"], callers: ["parent"] },
   { method: "patch", mount: "/children", path: "/:id", rule: ["verified_parent"], callers: ["parent"] },
-  { method: "delete", mount: "/children", path: "/:id", rule: ["verified_parent"], callers: ["parent"] },
+  // BE-16: deleting a child's data (with the parent's password), and following the request.
+  { method: "get", mount: "/children", path: "/:id/deletion-preview", rule: ["verified_parent"], callers: ["parent"] },
+  { method: "post", mount: "/children", path: "/:id/deletion", rule: ["verified_parent"], callers: ["parent"] },
+  { method: "get", mount: "/deletion-requests", path: "/:id", rule: ["verified_parent"], callers: ["parent"] },
 
   { method: "post", mount: "/stories", path: "/", rule: ["child_session"], callers: ["child_session"] },
   { method: "get", mount: "/stories", path: "/", rule: ["child_session", "verified_parent"], callers: ["child_session", "parent"] },

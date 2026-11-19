@@ -21,6 +21,8 @@ export const AUDIT_ACTIONS = [
   "child.create",
   "child.update",
   "child.delete",
+  "child.deletion_request", //  BE-16: the parent asked (password confirmed)
+  "child.deletion_complete", // BE-16: everything is gone (counts only, no content)
   "child_session.start",
   "child_session.exit",
   "story.view",
@@ -46,7 +48,7 @@ export interface AuditEntry {
   actorId: string | null;
   actorRole: "parent" | "child_session" | "facilitator" | "admin" | "system";
   action: AuditAction;
-  targetType: "user" | "consent" | "child" | "story" | "facilitator_link" | "order";
+  targetType: "user" | "consent" | "child" | "story" | "facilitator_link" | "order" | "deletion_request";
   targetId: string;
   ipAddress?: string | null;
 }

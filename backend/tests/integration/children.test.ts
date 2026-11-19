@@ -101,7 +101,7 @@ describe("child profiles: create, read, update, remove", () => {
     for (const id of [bobby.id, "abc", "665f1c2ab0d4e1a2b3c4d5e6"]) {
       const get = await sarah.agent.get(`/api/v1/children/${id}`).set(bearer(sarah.token));
       const patch = await sarah.agent.patch(`/api/v1/children/${id}`).set(bearer(sarah.token)).send({ name: "Mine now" });
-      const del = await sarah.agent.delete(`/api/v1/children/${id}`).set(bearer(sarah.token));
+      const del = await sarah.agent.post(`/api/v1/children/${id}/deletion`).set(bearer(sarah.token)).send({ password: PASSWORD });
       expect([get.status, patch.status, del.status]).toEqual([404, 404, 404]);
       expect(get.body.error.code).toBe("NOT_FOUND");
     }
@@ -152,22 +152,20 @@ describe("child profiles: create, read, update, remove", () => {
     expect(empty.status).toBe(400);
   });
 
-  it("removing a child is a soft delete, and it's logged", async () => {
+  it("asking to delete a child hides them at once, and it's logged (BE-16 does the rest)", async () => {
     const sarah = await parent();
     const alex = await addChild(sarah);
 
-    const res = await sarah.agent.delete(`/api/v1/children/${alex.id}`).set(bearer(sarah.token));
-    expect(res.status).toBe(204);
+    const res = await sarah.agent.post(`/api/v1/children/${alex.id}/deletion`).set(bearer(sarah.token)).send({ password: PASSWORD });
+    expect(res.status).toBe(202);
 
-    // Hidden from the API ...
+    // Hidden from the API straight away (the deletion job removes the record itself).
     const list = await sarah.agent.get("/api/v1/children").set(bearer(sarah.token));
     expect(list.body.children).toEqual([]);
     expect((await sarah.agent.get(`/api/v1/children/${alex.id}`).set(bearer(sarah.token))).status).toBe(404);
-    // ... but still in the database, marked as removed.
-    expect((await Child.findById(alex.id).lean())?.deletedAt).toBeInstanceOf(Date);
 
     // The audit log: who, what, which child, from where.
-    const entry = await AuditLog.findOne({ action: "child.delete", targetId: alex.id }).lean();
+    const entry = await AuditLog.findOne({ action: "child.deletion_request", targetId: alex.id }).lean();
     expect(entry).toMatchObject({ actorId: new mongoose.Types.ObjectId(sarah.id), actorRole: "parent", targetType: "child" });
     expect(entry?.ipAddress).toBeTruthy();
     expect(await AuditLog.exists({ action: "child.create", targetId: alex.id })).toBeTruthy();
@@ -228,7 +226,7 @@ describe("child sessions", () => {
       await request(app).get("/api/v1/children").set(as),
       await request(app).get(`/api/v1/children/${maya.id}`).set(as),
       await request(app).post("/api/v1/children").set(as).send({ name: "Sneaky", age: 9, language: "English" }),
-      await request(app).delete(`/api/v1/children/${alex.id}`).set(as),
+      await request(app).post(`/api/v1/children/${alex.id}/deletion`).set(as).send({ password: PASSWORD }),
       await request(app).post("/api/v1/auth/child-session").set(as).send({ childId: maya.id }),
     ];
     expect(tries.map((r) => r.status)).toEqual([403, 403, 403, 403, 403, 403, 403]);
@@ -267,8 +265,8 @@ describe("child sessions", () => {
 
     // Sarah removes Alex from her phone (a second login).
     const phone = await request.agent(app).post("/api/v1/auth/login").send({ email: sarah.email, password: PASSWORD });
-    const del = await request(app).delete(`/api/v1/children/${alex.id}`).set(bearer(phone.body.accessToken));
-    expect(del.status).toBe(204);
+    const del = await request(app).post(`/api/v1/children/${alex.id}/deletion`).set(bearer(phone.body.accessToken)).send({ password: PASSWORD });
+    expect(del.status).toBe(202);
 
     expect((await request(pingApp()).get("/ping").set(kid)).status).toBe(401);
     expect(await Session.countDocuments({ childId: alex.id })).toBe(0);

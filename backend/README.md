@@ -150,7 +150,8 @@ Child profiles, under `/api/v1/children`. Parent only, with a verified email and
 | `POST /` | `{ name, age, language, mode? }` → 201. Age 8–14. No `mode`: under 12 is `junior` (Explorer), 12+ is `senior` (Creator). |
 | `GET /:id` | One child |
 | `PATCH /:id` | Any of `name`, `age`, `language`, `mode`. A new age keeps the stored mode. |
-| `DELETE /:id` | Soft delete (`deletedAt` set, audit entry written) and ends that child's sessions. Full deletion comes with BE-16. |
+| `GET /:id/deletion-preview` | What deleting this child removes, what is kept, and whether a printed book is still on its way (BE-16). |
+| `POST /:id/deletion` `{ password }` | BE-16: the child is hidden at once (every call → 404), sessions end, and a background job deletes the profile, stories, comments, AI job records and storage files. Kept: audit entries, consent, payment records (without the delivery address). Waits while a paid hardback is printing. Emails the parent when done. Follow it with `GET /api/v1/deletion-requests/:id`. |
 
 Someone else's child, a removed child and a bad id all return 404. Each create, edit and remove is
 written to `auditLogs`.

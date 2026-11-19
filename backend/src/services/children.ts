@@ -3,7 +3,6 @@ import { Child } from "../db/models/index.js";
 import { AppError } from "../lib/errors.js";
 import type { Mode } from "../types/story.js";
 import { writeAudit } from "./audit.js";
-import { endChildSessions } from "./sessions.js";
 
 // Child profiles (guide BE-04). The golden rule: EVERY query includes
 // { parentId: <the logged-in parent> }, so a parent can only ever reach their own children.
@@ -76,12 +75,5 @@ export async function updateChild(parentId: string, childId: string, changes: Ch
   return toPublicChild(child);
 }
 
-// Soft delete: the profile is hidden everywhere but kept, until the full deletion workflow
-// (BE-16, Week 5). Any device handed to this child stops working straight away.
-export async function removeChild(parentId: string, childId: string, ip?: string): Promise<void> {
-  const child = await findOwnChild(parentId, childId);
-  child.deletedAt = new Date();
-  await child.save();
-  await endChildSessions(child._id);
-  await writeAudit({ actorId: parentId, actorRole: "parent", action: "child.delete", targetType: "child", targetId: childId, ipAddress: ip });
-}
+// Removing a child is now a full deletion with the parent's password (BE-16): see
+// services/deletion.ts and POST /children/:id/deletion.

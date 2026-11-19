@@ -43,6 +43,8 @@ export type ErrorCode =
   | "ALREADY_BOUGHT" // this story was already bought in this format
   | "PAYMENTS_NOT_READY" // Stripe isn't set up on this server, or couldn't be reached; try again
   | "WEBHOOK_INVALID" // a webhook without a valid Stripe signature
+  // BE-16 data deletion
+  | "DELETION_IN_PROGRESS" // this child's data is already being deleted
   | "INTERNAL_ERROR";
 
 export type FieldErrors = Record<string, string[] | undefined>;

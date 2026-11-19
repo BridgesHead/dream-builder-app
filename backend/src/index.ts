@@ -2,7 +2,8 @@ import { config } from "./config.js";
 import { createApp } from "./app.js";
 import { connectToDatabase, disconnectFromDatabase } from "./db/connect.js";
 import { closeQueue, queueKind, startWorker } from "./jobs/queue.js";
-import { runJob } from "./jobs/runJob.js";
+import { recoverDeletions } from "./jobs/deletionJob.js";
+import { processJob } from "./jobs/dispatch.js";
 import { logger } from "./lib/logger.js";
 import { closeRedis } from "./lib/redis.js";
 import { recoverJobs } from "./services/generation.js";
@@ -20,8 +21,9 @@ try {
 // Background jobs (BE-07). With Redis, separate workers do them (pnpm worker). Without Redis
 // (your PC), this process does them itself, and first puts back jobs a restart interrupted.
 if (queueKind() === "memory") {
-  startWorker(runJob);
+  startWorker(processJob);
   await recoverJobs();
+  await recoverDeletions();
   logger.warn("No REDIS_URL: story jobs run inside the API (fine on your PC, not allowed in production)");
 }
 

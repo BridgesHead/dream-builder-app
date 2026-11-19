@@ -106,3 +106,20 @@ export function createStoryRateLimits() {
     }),
   };
 }
+
+// Data deletion (BE-16): 10 WRONG passwords in 15 minutes per parent, like leaving a child
+// session, so a child holding a logged-in phone can't keep guessing.
+export function createDeletionRateLimits() {
+  return {
+    password: rateLimit({
+      ...storeFor("deletion"),
+      windowMs: 15 * MINUTE,
+      limit: 10,
+      skipSuccessfulRequests: true,
+      keyGenerator: (req) => `deletion:${req.user?.id ?? ipKey(req)}`,
+      standardHeaders: "draft-8",
+      legacyHeaders: false,
+      handler: tooMany("Too many wrong passwords. Please wait 15 minutes and try again."),
+    }),
+  };
+}

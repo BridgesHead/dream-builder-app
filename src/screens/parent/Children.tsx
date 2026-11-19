@@ -62,26 +62,23 @@ export function useServerChildren(): string | null {
 
 export function ChildrenScreen() {
   const [, navigate] = useLocation();
-  const { parent, updateParent } = useAppState();
+  const { parent, updateParent, story, clearStory } = useAppState();
   const loadProblem = useServerChildren();
   const [problem, setProblem] = useState<string | null>(null);
-  const [removing, setRemoving] = useState<string | null>(null);
+  // The child whose "delete data" panel is open (FE-12, backend BE-16).
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const active = parent.children.find((c) => c.id === parent.activeChildId);
 
-  const remove = async (id: string) => {
-    setProblem(null);
-    setRemoving(id);
-    try {
-      if (!inPreviewMode()) await childrenApi.removeChild(id);
-      updateParent({
-        children: parent.children.filter((c) => c.id !== id),
-        activeChildId: parent.activeChildId === id ? null : parent.activeChildId,
-      });
-    } catch (err) {
-      setProblem(messageOf(err));
-    } finally {
-      setRemoving(null);
-    }
+  // After the server accepted the deletion: the child is gone from this screen straight away.
+  const removed = (id: string, message: string) => {
+    updateParent({
+      children: parent.children.filter((c) => c.id !== id),
+      activeChildId: parent.activeChildId === id ? null : parent.activeChildId,
+    });
+    if (story.childId === id) clearStory();
+    setDeleting(null);
+    setNotice(message);
   };
 
   return (
@@ -91,6 +88,11 @@ export function ChildrenScreen() {
           <h1 className="font-display text-[26px] font-bold text-ink">Child profile configuration</h1>
           <Subtle className="mt-1">Filled by parent to set reading level, vocabulary depth, and narration mode.</Subtle>
           <ErrorLine message={problem ?? loadProblem} />
+          {notice && (
+            <p role="status" className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+              {notice}
+            </p>
+          )}
 
           <button
             type="button"
@@ -120,13 +122,20 @@ export function ChildrenScreen() {
                   </button>
                   <button
                     type="button"
-                    aria-label={`Remove ${child.name}`}
-                    disabled={removing === child.id}
-                    onClick={() => void remove(child.id)}
+                    aria-label={`Delete ${child.name}'s data`}
+                    aria-expanded={deleting === child.id}
+                    onClick={() => {
+                      setProblem(null);
+                      setNotice(null);
+                      setDeleting(deleting === child.id ? null : child.id);
+                    }}
                   >
-                    <Trash2 className={cx("h-4 w-4", removing === child.id ? "text-ink-muted" : "text-ink")} />
+                    <Trash2 className={cx("h-4 w-4", deleting === child.id ? "text-rose-600" : "text-ink")} />
                   </button>
                 </div>
+                {deleting === child.id && (
+                  <DeletePanel childId={child.id} childName={child.name} onCancel={() => setDeleting(null)} onDeleted={(message) => removed(child.id, message)} />
+                )}
               </li>
             ))}
           </ul>
@@ -139,6 +148,117 @@ export function ChildrenScreen() {
         </Card>
       </CenteredCard>
     </AppShell>
+  );
+}
+
+/**
+ * FE-12: deleting a child's data (backend BE-16). Shows what will be deleted and what is kept,
+ * asks for the parent's password, then the server takes over (and emails when it's done).
+ */
+function DeletePanel({
+  childId,
+  childName,
+  onCancel,
+  onDeleted,
+}: {
+  childId: string;
+  childName: string;
+  onCancel: () => void;
+  onDeleted: (message: string) => void;
+}) {
+  const demo = inPreviewMode();
+  const [preview, setPreview] = useState<childrenApi.DeletionPreview | null>(null);
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (demo) return;
+    childrenApi
+      .getDeletionPreview(childId)
+      .then(setPreview)
+      .catch((err) => setProblem(messageOf(err)));
+  }, [childId, demo]);
+
+  const confirm = async () => {
+    if (demo) {
+      onDeleted(`${childName}'s data has been deleted.`);
+      return;
+    }
+    if (!password || busy) return;
+    setBusy(true);
+    setProblem(null);
+    try {
+      const { waitsForPrint } = await childrenApi.requestDeletion(childId, password);
+      onDeleted(
+        waitsForPrint
+          ? `${childName} has been removed. Their data will be deleted as soon as the printed book has shipped, and we'll email you when it's done.`
+          : `${childName} has been removed and their data is being deleted. We'll email you when it's done.`,
+      );
+    } catch (err) {
+      setProblem(err instanceof ApiError && err.code === "INVALID_CREDENTIALS" ? "That password isn't right." : messageOf(err));
+      setBusy(false);
+    }
+  };
+
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+  return (
+    <div className="mt-2 rounded-2xl border-[1.5px] border-rose-200 bg-rose-50/60 p-4 text-sm">
+      <p className="font-bold text-ink">Delete {childName}'s data?</p>
+      <p className="mt-1 text-ink-muted">This can't be undone.</p>
+      {preview ? (
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <div>
+            <p className="text-xs font-extrabold uppercase tracking-wide text-rose-700">Deleted</p>
+            <ul className="mt-1 list-disc space-y-0.5 pl-4 text-ink">
+              <li>{childName}'s profile</li>
+              <li>
+                {plural(preview.willDelete.stories, "story", "stories")} and {plural(preview.willDelete.comments, "comment", "comments")}
+              </li>
+              <li>{plural(preview.willDelete.files, "picture or recording", "pictures and recordings")}</li>
+            </ul>
+          </div>
+          <div>
+            <p className="text-xs font-extrabold uppercase tracking-wide text-ink-muted">Kept</p>
+            <ul className="mt-1 list-disc space-y-0.5 pl-4 text-ink-muted">
+              {preview.kept.map((k) => (
+                <li key={k}>{k}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      ) : (
+        !demo && !problem && <p className="mt-3 text-ink-muted">Checking what will be deleted…</p>
+      )}
+      {preview?.waitsForPrint && (
+        <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-amber-800">
+          A printed book is still on its way. {childName} is removed now, and the rest is deleted once it has shipped.
+        </p>
+      )}
+      {!demo && (
+        <div className="mt-3">
+          <Field
+            id={`delete-password-${childId}`}
+            label="Your password, to confirm"
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onEnter={() => void confirm()}
+          />
+        </div>
+      )}
+      <ErrorLine message={problem} />
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button className="bg-rose-600 hover:bg-rose-700" disabled={busy || (!demo && !password)} onClick={() => void confirm()}>
+          {busy ? "Deleting…" : `Delete ${childName}'s data`}
+        </Button>
+        <Button variant="outline" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </div>
   );
 }
 

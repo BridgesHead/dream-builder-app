@@ -7,6 +7,7 @@ import { createAdminRouter } from "./routes/admin.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createChildSessionRouter } from "./routes/childSession.js";
 import { createChildrenRouter } from "./routes/children.js";
+import { createDeletionRequestsRouter } from "./routes/deletionRequests.js";
 import { createFacilitatorRouter } from "./routes/facilitator.js";
 import { createMediaRouter } from "./routes/media.js";
 import { createOrdersRouter } from "./routes/orders.js";
@@ -43,6 +44,7 @@ export function createApp() {
   api.use("/auth/child-session", createChildSessionRouter());
   api.use("/auth", createAuthRouter());
   api.use("/children", createChildrenRouter());
+  api.use("/deletion-requests", createDeletionRequestsRouter());
   api.use("/stories", createStoriesRouter());
   api.use("/orders", createOrdersRouter());
   api.use("/facilitator", createFacilitatorRouter());

@@ -96,7 +96,7 @@ describe("facilitator: read-only, linked children only", () => {
     const tries = [
       await request(app).post("/api/v1/children").set(as).send({ name: "New", age: 9, language: "English" }),
       await request(app).patch(`/api/v1/children/${alex}`).set(as).send({ name: "Changed" }),
-      await request(app).delete(`/api/v1/children/${alex}`).set(as),
+      await request(app).post(`/api/v1/children/${alex}/deletion`).set(as).send({ password: TEST_PASSWORD }),
       await request(app).post("/api/v1/auth/child-session").set(as).send({ childId: alex }),
     ];
     expect(tries.map((r) => r.status)).toEqual([403, 403, 403, 403]);
@@ -108,7 +108,7 @@ describe("facilitator: read-only, linked children only", () => {
     const alex = await makeChild(parent.id);
     const teacher = await makeUser("facilitator");
     await linkToChild(teacher.id, alex);
-    await request(app).delete(`/api/v1/children/${alex}`).set(bearer(parent.token));
+    await request(app).post(`/api/v1/children/${alex}/deletion`).set(bearer(parent.token)).send({ password: TEST_PASSWORD });
 
     const res = await request(app).get("/api/v1/facilitator/children").set(bearer(teacher.token));
     expect(res.body.children).toEqual([]);
@@ -216,14 +216,14 @@ describe("each listed action writes exactly one audit entry", () => {
     const started = await auditDuring(() => request(app).post("/api/v1/auth/child-session").set(as).send({ childId }));
     const kid = await makeChildSession(parent.id, childId);
     const exited = await auditDuring(() => request(app).post("/api/v1/auth/child-session/exit").set(bearer(kid)).send({ password: TEST_PASSWORD }));
-    const removed = await auditDuring(() => request(app).delete(`/api/v1/children/${childId}`).set(as));
+    const removed = await auditDuring(() => request(app).post(`/api/v1/children/${childId}/deletion`).set(as).send({ password: TEST_PASSWORD }));
 
     for (const [entries, action] of [
       [created, "child.create"],
       [updated, "child.update"],
       [started, "child_session.start"],
       [exited, "child_session.exit"],
-      [removed, "child.delete"],
+      [removed, "child.deletion_request"],
     ] as const) {
       expect(entries.map((e) => e.action)).toEqual([action]);
       expect(entries[0]).toMatchObject({ actorRole: "parent", targetType: "child", targetId: childId });

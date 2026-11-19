@@ -40,7 +40,7 @@ export interface RunningWorker {
 
 interface Driver {
   readonly name: "bullmq" | "memory";
-  add(jobId: string, key: string): Promise<void>;
+  add(jobId: string, key: string, delayMs?: number): Promise<void>;
   startWorker(processor: Processor, options?: WorkerOptions): RunningWorker;
   close(): Promise<void>;
 }
@@ -55,13 +55,14 @@ class BullDriver implements Driver {
   private connection: Redis = createRedisConnection();
   private queue = new Queue(QUEUE_NAME, { connection: this.connection });
 
-  async add(jobId: string, key: string): Promise<void> {
+  async add(jobId: string, key: string, delayMs = 0): Promise<void> {
     // `jobId: key`: BullMQ ignores a second add with the same key, so a job can't be queued twice.
     await this.queue.add(
       "job",
       { jobId },
       {
         jobId: key,
+        ...(delayMs > 0 && { delay: delayMs }),
         attempts: config.queue.attempts,
         backoff: { type: "exponential", delay: config.queue.backoffMs },
         // Keep some finished entries for debugging; the full record is in MongoDB anyway.
@@ -116,11 +117,15 @@ class MemoryDriver implements Driver {
   private processor: Processor | null = null;
   private timers = new Set<ReturnType<typeof setTimeout>>();
 
-  async add(jobId: string, key: string): Promise<void> {
+  async add(jobId: string, key: string, delayMs = 0): Promise<void> {
     if (this.known.has(key)) return; // already queued: never twice
     this.known.add(key);
-    this.waiting.push({ jobId, key, attempt: 1 });
-    this.pump();
+    const start = () => {
+      this.waiting.push({ jobId, key, attempt: 1 });
+      this.pump();
+    };
+    if (delayMs > 0) this.later(start, delayMs);
+    else start();
   }
 
   startWorker(processor: Processor): RunningWorker {
@@ -207,9 +212,15 @@ export function queueKind(): Driver["name"] {
  * Puts a job on the list. `key` makes it unique: adding the same key again does nothing.
  * Normally the job's MongoDB id; a manual retry uses a new key so it runs again.
  */
-export function enqueueJob(jobId: string, key: string = jobId): Promise<void> {
-  return getDriver().add(jobId, key);
+export function enqueueJob(jobId: string, key: string = jobId, options: { delayMs?: number } = {}): Promise<void> {
+  return getDriver().add(jobId, key, options.delayMs);
 }
+
+/**
+ * The jobs on the list are story jobs (a jobs-collection id) or, from BE-16, deletion jobs
+ * ("deletion-<deletionRequest id>"). The worker sends each to the right runner (jobs/dispatch.ts).
+ */
+export const DELETION_JOB_PREFIX = "deletion-"; // BullMQ ids may not contain ":"
 
 /** Starts taking jobs from the list (the worker program, or the API itself in memory mode). */
 export function startWorker(processor: Processor, options?: WorkerOptions): RunningWorker {

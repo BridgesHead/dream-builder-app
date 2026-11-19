@@ -104,6 +104,13 @@ const envSchema = z.object({
   DELIVERY_HARDBACK_AED: z.coerce.number().min(0).max(10_000).default(0),
   // How long Stripe's payment page stays open (Stripe allows 30 minutes to 24 hours).
   CHECKOUT_EXPIRES_MINUTES: z.coerce.number().int().min(30).max(24 * 60).default(60),
+
+  // ---- Data deletion (BE-16) ----
+  // How long database backups are kept (AWS-02 sets the real value). The confirmation email
+  // tells the parent when the last copy in a backup is gone.
+  BACKUP_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(35),
+  // While a paid hardback is still printing, the deletion waits and checks again this often.
+  DELETION_PRINT_CHECK_MINUTES: z.coerce.number().min(0.001).max(24 * 60).default(60),
 })
   .refine((env) => env.NODE_ENV !== "production" || !!env.REDIS_URL, {
     path: ["REDIS_URL"],
@@ -176,6 +183,10 @@ export const config = {
     prices: { digital: parsed.data.PRICE_DIGITAL_AED, hardback: parsed.data.PRICE_HARDBACK_AED },
     delivery: { digital: 0, hardback: parsed.data.DELIVERY_HARDBACK_AED },
     checkoutExpiresMinutes: parsed.data.CHECKOUT_EXPIRES_MINUTES,
+  },
+  deletion: {
+    backupRetentionDays: parsed.data.BACKUP_RETENTION_DAYS,
+    printCheckMs: Math.round(parsed.data.DELETION_PRINT_CHECK_MINUTES * 60_000),
   },
   review: {
     redrawsPerStory: parsed.data.REDRAWS_PER_STORY,

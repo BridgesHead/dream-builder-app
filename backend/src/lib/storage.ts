@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { config } from "../config.js";
 
@@ -50,6 +50,27 @@ export interface Storage {
   kind: "s3" | "local";
   save(key: string, body: Uint8Array, contentType: string): Promise<void>;
   link(key: string): Promise<SignedLink>;
+  /** How many files are in a folder, e.g. "stories/665f…/" (BE-16). */
+  countFolder(prefix: string): Promise<number>;
+  /** Deletes every file in a folder; returns how many. Deleting an empty folder is fine (BE-16). */
+  removeFolder(prefix: string): Promise<number>;
+}
+
+/** The folder of everything one story owns: pictures, redraws, and later voice and print files. */
+export const storyFolder = (storyId: string) => `stories/${storyId}/`;
+
+// A folder is always "<safe key>/": never the whole bucket, never "../".
+function checkFolder(prefix: string): void {
+  if (!prefix.endsWith("/") || !isSafeKey(`${prefix}x`)) throw new Error("Invalid storage folder");
+}
+
+/** Tests only: the next N folder deletes fail, to check the deletion job retries (BE-16). */
+export const storageFaults = { removeFailures: 0 };
+function maybeFail(): void {
+  if (storageFaults.removeFailures > 0) {
+    storageFaults.removeFailures -= 1;
+    throw new Error("Storage delete failed on purpose (test)");
+  }
 }
 
 // ---- S3 (the UAE bucket) ----------------------------------------------------------------
@@ -69,7 +90,34 @@ export function s3Storage(bucket: string): Storage {
       const url = await getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn: seconds });
       return { url, expiresAt: new Date(Date.now() + seconds * 1000) };
     },
+    async countFolder(prefix) {
+      checkFolder(prefix);
+      return (await listKeys(prefix)).length;
+    },
+    async removeFolder(prefix) {
+      checkFolder(prefix);
+      maybeFail();
+      const keys = await listKeys(prefix);
+      // At most 1000 keys per delete call (S3's limit).
+      for (let i = 0; i < keys.length; i += 1000) {
+        const batch = keys.slice(i, i + 1000).map((Key) => ({ Key }));
+        const res = await client.send(new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: batch, Quiet: true } }));
+        if (res.Errors?.length) throw new Error(`S3 could not delete ${res.Errors.length} file(s)`);
+      }
+      return keys.length;
+    },
   };
+
+  async function listKeys(prefix: string): Promise<string[]> {
+    const keys: string[] = [];
+    let token: string | undefined;
+    do {
+      const page = await client.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: token }));
+      for (const o of page.Contents ?? []) if (o.Key) keys.push(o.Key);
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
+    return keys;
+  }
 }
 
 // ---- The local folder (your PC) --------------------------------------------------------
@@ -93,7 +141,29 @@ const localStorage: Storage = {
     const url = `${config.storage.apiUrl}/api/v1/media/${key}?expires=${expires}&sig=${signature(key, expires)}`;
     return { url, expiresAt: new Date(expires * 1000) };
   },
+  async countFolder(prefix) {
+    checkFolder(prefix);
+    return (await localFiles(path.join(root(), prefix))).length;
+  },
+  async removeFolder(prefix) {
+    checkFolder(prefix);
+    maybeFail();
+    const dir = path.join(root(), prefix);
+    const count = (await localFiles(dir)).length;
+    await rm(dir, { recursive: true, force: true });
+    return count;
+  },
 };
+
+/** Every file under a local folder (none if it doesn't exist). */
+async function localFiles(dir: string): Promise<string[]> {
+  try {
+    const entries = await readdir(dir, { withFileTypes: true, recursive: true });
+    return entries.filter((e) => e.isFile()).map((e) => path.join(e.parentPath, e.name));
+  } catch {
+    return [];
+  }
+}
 
 /**
  * For the /api/v1/media route: the file, if the link's signature is right and it hasn't
