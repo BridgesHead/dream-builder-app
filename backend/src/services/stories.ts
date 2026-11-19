@@ -88,8 +88,11 @@ export async function saveStep(childId: string, storyId: string, patch: StoryPat
 }
 
 // POST /stories/:id/generate: generation starts only from a complete draft (defect 2).
-export async function startGeneration(childId: string, storyId: string): Promise<void> {
-  const story = await findReachableStory({ kind: "child", childId }, storyId);
+export async function startGeneration(
+  caller: { childId: string; parentId: string; ip?: string | null },
+  storyId: string,
+): Promise<void> {
+  const story = await findReachableStory({ kind: "child", childId: caller.childId }, storyId);
   // Only a draft can start generating (409 otherwise).
   assertStatusChange(story.status, "generating");
 
@@ -98,7 +101,7 @@ export async function startGeneration(childId: string, storyId: string): Promise
     throw new AppError(400, "STORY_INCOMPLETE", "Some story steps aren't finished yet", { missingSteps: missing });
   }
   // The job queue makes it in the background (BE-07); Final Climb follows GET /status.
-  await beginGeneration(storyId);
+  await beginGeneration(storyId, { role: "child_session", parentId: caller.parentId }, caller.ip);
 }
 
 // GET /stories/:id/status: overall progress plus text and picture status per panel.

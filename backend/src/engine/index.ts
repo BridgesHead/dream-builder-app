@@ -25,6 +25,7 @@ import { finding, type DraftPanel, type EngineResult, type Finding, type WorkPan
 export * from "./types.js";
 export { buildContext, type StoryAnswers, type StoryContext } from "./context.js";
 export { planFor, BEAT_NAMES } from "./plan.js";
+export { cleanRewrite, rewriteProblems, wordCount } from "./rewriteCheck.js";
 
 export function runEngine(draft: DraftPanel[], ctx: StoryContext): EngineResult {
   const repaired: Finding[] = [];

@@ -70,7 +70,7 @@ async function startStory(answers: StoryAnswers = EMBER_ANSWERS, draft = EMBER_T
   const childId = await makeChild(parent.id);
   const story = await Story.create({ childId, ...answers, charName: HERO });
   const id = String(story._id);
-  await beginGeneration(id);
+  await beginGeneration(id, { role: "child_session", parentId: parent.id });
   return { id, parent, childId };
 }
 

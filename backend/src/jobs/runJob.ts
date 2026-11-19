@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { Job, Story } from "../db/models/index.js";
 import { config } from "../config.js";
 import { logger } from "../lib/logger.js";
-import { getStorage, panelImageKey } from "../lib/storage.js";
+import { getStorage, panelImageKey, panelRedrawKey } from "../lib/storage.js";
 import { ensureJob, finishIfDone } from "../services/generation.js";
-import { PANEL_COUNT, type StoryPath } from "../types/story.js";
+import { PANEL_COUNT, type StoryPath, type StoryStatus } from "../types/story.js";
 import { getProvider, type AiResult, type StoryForAi } from "./providers.js";
 import { StoryRulesError, writeStoryText } from "./storyText.js";
 import type { Attempt } from "./queue.js";
@@ -17,10 +17,12 @@ import type { Attempt } from "./queue.js";
 
 type JobDoc = NonNullable<Awaited<ReturnType<typeof Job.findOne>>>;
 /** The saved story, as much of it as the handlers read. */
-type StoryDoc = { panels: { number: number; text?: string | null }[] };
+type StoryDoc = { panels: { number: number; text?: string | null; imageKey?: string | null; previousImageKeys?: string[] }[] };
 
 interface Handler {
   timeoutMs: () => number;
+  /** The story status this job works in (default "generating"). Anything else: the job stops. */
+  storyStatus?: StoryStatus;
   /** Before the AI call, e.g. show "running" on the panel. */
   onStart?(job: JobDoc): Promise<void>;
   /** The AI call, then saving its result on the story. Returns what to record on the job. */
@@ -89,7 +91,42 @@ const HANDLERS: Partial<Record<JobDoc["type"], Handler>> = {
       await Story.updateOne(panelFilter(job), { $set: { "panels.$.imageStatus": "failed" } });
     },
   },
-  // comic_script and comic_cell_image arrive in BE-11, panel_redraw in BE-12.
+  // A new picture for ONE panel, asked for by the child during review (BE-12).
+  //   - saved under a NEW key, so the old picture is untouched while this runs;
+  //   - only when it worked does the panel point at the new picture (the old key is kept in
+  //     previousImageKeys);
+  //   - when every try failed, the panel keeps its old picture and redrawStatus says "failed".
+  panel_redraw: {
+    timeoutMs: () => config.queue.imageTimeoutMs,
+    storyStatus: "child_review",
+    async onStart(job) {
+      await Story.updateOne(panelFilter(job), { $set: { "panels.$.redrawStatus": "running" } });
+    },
+    async run(job, story, saved) {
+      const n = job.panelNumber!;
+      const panel = saved.panels.find((p) => p.number === n);
+      // 1 for the first redraw, 2 for the next…: a different seed each time (see falProvider).
+      const variant = (panel?.previousImageKeys?.length ?? 0) + 1;
+      const result = await getProvider().panelImage(story, n, panel?.text ?? "", variant);
+      const key = panelRedrawKey(story.id, n, String(job._id), result.value.ext);
+      await getStorage().save(key, result.value.body, result.value.contentType);
+      // Swap only while the story is still with the child (submitting waits for redraws).
+      const swapped = await Story.updateOne(
+        { _id: job.storyId, status: "child_review", panels: { $elemMatch: { number: n, imageKey: panel?.imageKey ?? null } } },
+        {
+          $set: { "panels.$.imageKey": key, "panels.$.redrawStatus": result.fallback ? "fallback" : "success" },
+          ...(panel?.imageKey ? { $push: { "panels.$.previousImageKeys": panel.imageKey } } : {}),
+        },
+      );
+      if (swapped.modifiedCount === 0) throw new Error("The story changed while the picture was being drawn");
+      return result;
+    },
+    async onFail(job) {
+      // The old picture stays; the child can ask again.
+      await Story.updateOne(panelFilter(job), { $set: { "panels.$.redrawStatus": "failed" } });
+    },
+  },
+  // comic_script and comic_cell_image arrive in BE-11.
 };
 
 class Timeout extends Error {}
@@ -121,9 +158,16 @@ export async function runJob(jobId: string, { attempt, isLastAttempt }: Attempt)
 
   const handler = HANDLERS[job.type];
   const story = await Story.findById(job.storyId).lean();
-  if (!handler || !story || story.status !== "generating" || !story.storyPath) {
-    const reason = !handler ? `"${job.type}" jobs aren't built yet` : "The story isn't being generated any more";
+  const wanted = handler?.storyStatus ?? "generating";
+  if (!handler || !story || story.status !== wanted || !story.storyPath) {
+    const reason = !handler
+      ? `"${job.type}" jobs aren't built yet`
+      : wanted === "generating"
+        ? "The story isn't being generated any more"
+        : "The story isn't with the child any more";
     await Job.updateOne(mine, { $set: { status: "failed", error: reason } });
+    // A redraw that can't run any more: the panel keeps its old picture and shows "failed".
+    if (handler && wanted !== "generating") await handler.onFail?.(job);
     return; // retrying wouldn't help
   }
 

@@ -47,6 +47,20 @@ const panelSchema = new Schema(
     imageKey,
     textStatus: workStatus,
     imageStatus: workStatus,
+    // A redraw (BE-12): null = never asked. While "queued"/"running" the old picture is still
+    // shown; only a successful redraw changes imageKey. "failed" = the old picture stayed.
+    redrawStatus: { type: String, enum: [...WORK_STATUSES, null], default: null },
+    // Earlier pictures, oldest first (kept in our bucket, so nothing is lost by a redraw).
+    previousImageKeys: { type: [String], default: [] },
+  },
+  subdocumentOptions,
+);
+
+// An earlier version of a comic cell's words (BE-12 inline edits keep the old one).
+const cellVersionSchema = new Schema(
+  {
+    caption: { type: String, maxlength: 1000, default: "" },
+    dialogue: { type: String, maxlength: 500, default: null },
   },
   subdocumentOptions,
 );
@@ -61,6 +75,8 @@ const comicCellSchema = new Schema(
     bubbleType: { type: String, enum: ["thought", "speech", "none"], required: true, default: "none" },
     // A Tempo bubble holds music notation only (BE-11 checks that rule).
     tempo: { type: String, maxlength: 100, default: null },
+    // Earlier caption + dialogue, oldest first (BE-12).
+    previousVersions: { type: [cellVersionSchema], default: [] },
     imageKey,
     imageStatus: workStatus,
   },
@@ -112,7 +128,10 @@ const storySchema = new Schema(
     braveMove3: answer(),
     heroWords3: answer(),
     storyGeneratedAt: { type: Date, default: null },
+    // true once the child taps "I'm done!" (BE-12); false again after a change request.
     confirmedByChild: { type: Boolean, required: true, default: false },
+    // When the parent approved it (BE-12). Only an approved story can be bought (BE-17).
+    approvedAt: { type: Date, default: null },
 
     // Fields the guide adds to StoryState.
     oneMoreAmazingThing: answer(),

@@ -24,7 +24,13 @@ export const AUDIT_ACTIONS = [
   "child_session.start",
   "child_session.exit",
   "story.view",
-  "story.approve",
+  // Every story status change (BE-12), one action per arrow of the lifecycle:
+  "story.generate", //         draft → generating
+  "story.generate_undo", //    generating → draft (the queue couldn't take the jobs)
+  "story.ready", //            generating → child_review
+  "story.submit", //           child_review → parent_review ("I'm done!")
+  "story.request_changes", //  parent_review → child_review
+  "story.approve", //          parent_review → approved
   "user.create",
   "user.role_change",
   "facilitator.link",

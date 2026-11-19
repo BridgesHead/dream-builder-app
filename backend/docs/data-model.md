@@ -37,10 +37,11 @@ A story's parent is found through its child (`story.childId` → `child.parentId
 
 ### Inside a story
 
-- `panels[]`: `number` (1–15, unique in the story), `text`, `previousTexts[]`, `imageKey`, `textStatus`, `imageStatus`.
-  12 panels for `two_act`, 15 for `three_act`.
+- `panels[]`: `number` (1–15, unique in the story), `text`, `previousTexts[]`, `imageKey`, `textStatus`, `imageStatus`,
+  `redrawStatus` (null = never redrawn) and `previousImageKeys[]` (BE-12). 12 panels for `two_act`, 15 for `three_act`.
 - `comicCells[]`: `page` (1–10), `cell` (1–4), `caption`, `dialogue`, `bubbleType` (`thought` / `speech` / `none`),
-  `tempo`, `imageKey`, `imageStatus`. 32 cells for two acts, 40 for three.
+  `tempo`, `previousVersions[]` (earlier caption + dialogue, BE-12), `imageKey`, `imageStatus`. 32 cells for two acts, 40 for three.
+- `approvedAt` (story): when the parent approved it (BE-12). Only an approved story can be bought (BE-17).
 - `imageKey` is a key in our bucket, never a web link (so never a fal.ai URL).
 - `textStatus`, `imageStatus` and job `status` use: `queued`, `running`, `success`, `fallback`, `failed`.
 

@@ -61,6 +61,15 @@ const MATRIX: Entry[] = [
   { method: "post", mount: "/stories", path: "/:id/generate/retry", rule: ["child_session"], callers: ["child_session"] },
   { method: "get", mount: "/stories", path: "/:id/status", rule: ["child_session", "verified_parent"], callers: ["child_session", "parent"] },
   { method: "get", mount: "/stories", path: "/:id/panels/:number/image", rule: ["child_session", "verified_parent"], callers: ["child_session", "parent"] },
+  // BE-12 draft review: the child edits and submits, the parent comments and approves.
+  { method: "patch", mount: "/stories", path: "/:id/panels/:number", rule: ["child_session"], callers: ["child_session"] },
+  { method: "patch", mount: "/stories", path: "/:id/comic-cells/:page/:cell", rule: ["child_session"], callers: ["child_session"] },
+  { method: "post", mount: "/stories", path: "/:id/panels/:number/redraw", rule: ["child_session"], callers: ["child_session"] },
+  { method: "post", mount: "/stories", path: "/:id/panels/:number/rewrite", rule: ["child_session"], callers: ["child_session"] },
+  { method: "post", mount: "/stories", path: "/:id/submit", rule: ["child_session"], callers: ["child_session"] },
+  { method: "get", mount: "/stories", path: "/:id/comments", rule: ["child_session", "verified_parent"], callers: ["child_session", "parent"] },
+  { method: "post", mount: "/stories", path: "/:id/comments", rule: ["verified_parent"], callers: ["parent"] },
+  { method: "post", mount: "/stories", path: "/:id/approve", rule: ["verified_parent"], callers: ["parent"] },
 
   // The signed link is the permission (an <img> tag can't send a token).
   { method: "get", mount: "/media", path: "/*key", rule: ["public"], callers: EVERYONE },

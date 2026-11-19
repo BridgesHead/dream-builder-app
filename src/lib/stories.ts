@@ -68,6 +68,17 @@ export interface GenerationStatus {
   /** Jobs that failed every try; "Try again" puts them back. */
   failed: { type: string; panelNumber: number | null; error: string | null }[];
   canRetry: boolean;
+  /** Picture redraws during review (backend BE-12): the latest one per page. */
+  redraws?: RedrawStatus[];
+}
+
+export interface RedrawStatus {
+  panelNumber: number;
+  status: WorkStatus;
+  /** Why it failed (the old picture stayed). */
+  error: string | null;
+  /** true: the child can ask for a new picture again. */
+  canRetry: boolean;
 }
 
 /**
@@ -93,4 +104,83 @@ export function routeForStep(step: string): string {
   const act = /^act([123])(?:\.(obstacle|feeling|move))?$/.exec(step);
   if (act) return act[2] ? `/story/act/${act[1]}/${act[2]}` : actStart(Number(act[1]) as 1 | 2 | 3, "senior");
   return (ROUTES as Record<string, string>)[step] ?? ROUTES.author;
+}
+
+// ---- Draft review (backend BE-12) -------------------------------------------------------------
+// The child polishes the made story (child_review), taps "I'm done!", and a parent comments,
+// asks for changes or approves (parent_review → approved). Anything outside the right status
+// is refused with STORY_LOCKED.
+
+/** One page of the made story, as the server has it. */
+export interface StoryPanel {
+  number: number;
+  text: string;
+  /** A short-lived link to the page's picture in our storage, or null. */
+  imageUrl: string | null;
+  redrawStatus: WorkStatus | null;
+}
+
+/** The made story: its status and pages (for the book and review screens). */
+export interface ReviewStory {
+  status: StorySummary["status"];
+  mode: Mode;
+  title: string;
+  panels: StoryPanel[];
+}
+
+export async function getReviewStory(id: string): Promise<ReviewStory> {
+  const { story } = await api<{ story: ReviewStory & { panels: (StoryPanel & Record<string, unknown>)[] } }>(`/stories/${encodeURIComponent(id)}`);
+  return {
+    status: story.status,
+    mode: story.mode,
+    title: story.title,
+    panels: story.panels.map((p) => ({ number: p.number, text: p.text, imageUrl: p.imageUrl ?? null, redrawStatus: p.redrawStatus ?? null })),
+  };
+}
+
+/** New words for one page; the server keeps the old ones. */
+export async function editPanel(id: string, panelNumber: number, text: string): Promise<void> {
+  await api(`/stories/${encodeURIComponent(id)}/panels/${panelNumber}`, { method: "PATCH", body: { text } });
+}
+
+/** A new picture for one page, drawn in the background. Follow it with getGenerationStatus().redraws. */
+export async function redrawPanel(id: string, panelNumber: number): Promise<{ redrawsLeft: number }> {
+  return (await api<{ redraw: { redrawsLeft: number } }>(`/stories/${encodeURIComponent(id)}/panels/${panelNumber}/redraw`, { method: "POST" })).redraw;
+}
+
+/** Creator mode only: one better way to say a sentence. It changes nothing until the child uses it. */
+export async function rewriteSentence(id: string, panelNumber: number, sentence: string): Promise<string> {
+  const res = await api<{ suggestion: string }>(`/stories/${encodeURIComponent(id)}/panels/${panelNumber}/rewrite`, { method: "POST", body: { sentence } });
+  return res.suggestion;
+}
+
+/** "I'm done!": the story goes to a parent for review. */
+export async function submitStory(id: string): Promise<void> {
+  await api(`/stories/${encodeURIComponent(id)}/submit`, { method: "POST" });
+}
+
+export interface StoryComment {
+  id: string;
+  panelNumber: number | null;
+  type: "comment" | "change_request";
+  text: string;
+  authorName: string | null;
+  createdAt: string;
+}
+
+export async function listComments(id: string): Promise<StoryComment[]> {
+  return (await api<{ comments: StoryComment[] }>(`/stories/${encodeURIComponent(id)}/comments`)).comments;
+}
+
+/** The parent's notes. Any change request sends the story back to the child. */
+export async function addComments(
+  id: string,
+  comments: { panelNumber: number | null; text: string; type: "comment" | "change_request" }[],
+): Promise<{ status: StorySummary["status"] }> {
+  return api(`/stories/${encodeURIComponent(id)}/comments`, { method: "POST", body: { comments } });
+}
+
+/** The parent approves: the story is locked, and can be bought. */
+export async function approveStory(id: string): Promise<void> {
+  await api(`/stories/${encodeURIComponent(id)}/approve`, { method: "POST" });
 }

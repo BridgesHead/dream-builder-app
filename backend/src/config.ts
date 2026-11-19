@@ -81,6 +81,14 @@ const envSchema = z.object({
   IMAGE_URL_TTL_SECONDS: z.coerce.number().int().min(60).max(7 * 24 * 3600).default(3600),
   // The API's own public address, for picture links to the local folder.
   API_URL: z.url().default("http://localhost:3000"),
+
+  // ---- Draft review (BE-12) ----
+  // How many new pictures one story may ask for (each costs a fal.ai call). Failed ones don't count.
+  REDRAWS_PER_STORY: z.coerce.number().int().min(0).max(100).default(5),
+  // The Creator-mode sentence rewriter: the longest sentence it may give back, and how many
+  // times it asks the AI before giving up. Sami Bhai confirms the real word limit.
+  REWRITE_MAX_WORDS: z.coerce.number().int().min(3).max(100).default(25),
+  REWRITE_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
 })
   .refine((env) => env.NODE_ENV !== "production" || !!env.REDIS_URL, {
     path: ["REDIS_URL"],
@@ -140,5 +148,10 @@ export const config = {
     backoffMs: parsed.data.JOB_BACKOFF_MS,
     textTimeoutMs: parsed.data.TEXT_JOB_TIMEOUT_MS,
     imageTimeoutMs: parsed.data.IMAGE_JOB_TIMEOUT_MS,
+  },
+  review: {
+    redrawsPerStory: parsed.data.REDRAWS_PER_STORY,
+    rewriteMaxWords: parsed.data.REWRITE_MAX_WORDS,
+    rewriteAttempts: parsed.data.REWRITE_ATTEMPTS,
   },
 };

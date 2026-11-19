@@ -145,3 +145,30 @@ export function readScene(raw: string): string | null {
   if (scene.length < 10 || scene.length > 400) return null;
   return scene.replace(wordPattern(STAND_IN), "the hero");
 }
+
+/**
+ * The Creator-mode sentence rewriter (BE-12): ONE other way to say the child's sentence, in
+ * the same gentle tone. Our code checks the answer (src/engine/rewriteCheck.ts) and asks
+ * again, with the reasons, when it breaks a rule.
+ */
+export function rewriteSentencePrompt(
+  ctx: StoryContext,
+  input: { sentence: string; panelText: string; maxWords: number; problems: string[] },
+): Prompt {
+  const hide = (s: string) => hideName(s, ctx.heroName);
+  return {
+    system: [
+      "You help a child aged 12 to 14 polish one sentence of their own picture-book story, in British English.",
+      "Keep their meaning, their hero and their ideas: only find a fresher, more vivid way to say it.",
+      "Warm, gentle and hopeful. Never scary. No magic that fixes problems, and problems never simply disappear.",
+      "Never use medical or clinical words (like anxiety, therapy or diagnosis).",
+      "Answer with the new sentence only: one sentence, no quotes, no explanation.",
+    ].join("\n"),
+    prompt: [
+      `The page it is on: "${hide(input.panelText)}"`,
+      `The sentence to rewrite: "${hide(input.sentence)}"`,
+      `Write exactly ONE sentence of at most ${input.maxWords} words.`,
+      ...(input.problems.length ? [`Your last answer was refused because it ${input.problems.join(", and ")}. Fix that.`] : []),
+    ].join("\n"),
+  };
+}

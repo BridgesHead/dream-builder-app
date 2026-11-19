@@ -90,3 +90,19 @@ export function createAuthRateLimits() {
     }),
   };
 }
+
+// Story review limits (BE-12). Each sentence rewrite is an AI call that costs money, so one
+// child gets 30 in 15 minutes: plenty for polishing a story, not enough to run up a bill.
+export function createStoryRateLimits() {
+  return {
+    rewrite: rateLimit({
+      ...storeFor("rewrite"),
+      windowMs: 15 * MINUTE,
+      limit: 30,
+      keyGenerator: (req) => `rewrite:${req.childSession?.childId ?? ipKey(req)}`,
+      standardHeaders: "draft-8",
+      legacyHeaders: false,
+      handler: tooMany("That's a lot of sentence help! Take a little break and try again soon."),
+    }),
+  };
+}

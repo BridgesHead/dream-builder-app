@@ -34,6 +34,11 @@ export type ErrorCode =
   | "STORY_NOT_DRAFT" // the story has left draft, so the wizard can't change it
   | "STORY_INCOMPLETE" // generation asked for before every step is done; fields.missingSteps lists them
   | "GENERATION_NOT_READY" // the job queue couldn't take the story (e.g. Redis is down); try again
+  // BE-12 review, edits and approval
+  | "STORY_LOCKED" // the story isn't in the status this needs (e.g. editing during parent_review)
+  | "REDRAW_IN_PROGRESS" // a new picture for this page is already being drawn
+  | "REDRAW_LIMIT" // this story used up its redraws (REDRAWS_PER_STORY)
+  | "REWRITE_FAILED" // the AI couldn't give a sentence that keeps the rules; try again
   | "INTERNAL_ERROR";
 
 export type FieldErrors = Record<string, string[] | undefined>;

@@ -4,7 +4,7 @@ import { enqueueJob } from "../jobs/queue.js";
 import { AppError } from "../lib/errors.js";
 import { logger } from "../lib/logger.js";
 import { PANEL_COUNT, type StoryPath, type WorkStatus } from "../types/story.js";
-import { canChangeStatus } from "./storyLifecycle.js";
+import { auditStatus, changeStoryStatus, type StatusActor } from "./storyStatus.js";
 
 // Story generation (guide BE-07): starting it, retrying failed jobs, noticing when it's
 // finished, and the status that Final Climb and Book Progress Detail show.
@@ -35,33 +35,36 @@ export async function finishIfDone(storyId: string): Promise<void> {
   const expected = PANEL_COUNT[story.storyPath as StoryPath];
   const panelsDone =
     story.panels.length === expected && story.panels.every((p) => DONE.includes(p.textStatus) && DONE.includes(p.imageStatus));
-  const jobs = await Job.find({ storyId }, { status: 1 }).lean();
+  const jobs = await Job.find({ storyId, type: { $ne: "panel_redraw" } }, { status: 1 }).lean();
   if (!panelsDone || jobs.some((j) => !DONE.includes(j.status))) return;
-  if (!canChangeStatus("generating", "child_review")) return;
-  // Only from "generating", so two jobs finishing together can't both do it.
-  await Story.updateOne({ _id: storyId, status: "generating" }, { $set: { status: "child_review", storyGeneratedAt: new Date() } });
+  // Only from "generating", so two jobs finishing together can't both do it (and only one
+  // audit entry is written).
+  await changeStoryStatus({ storyId, from: "generating", to: "child_review", actor: { role: "system" }, alsoSet: { storyGeneratedAt: new Date() } });
 }
 
 // Called by POST /stories/:id/generate once the draft passed its checks (stories.ts).
-export async function beginGeneration(storyId: string): Promise<void> {
+export async function beginGeneration(storyId: string, actor: StatusActor, ipAddress?: string | null): Promise<void> {
   // Only from "draft": two taps on the button can't start it twice.
-  const moved = await Story.updateOne({ _id: storyId, status: "draft" }, { $set: { status: "generating" } });
-  if (moved.modifiedCount === 0) throw new AppError(409, "INVALID_STATUS_CHANGE", "This story is already being made");
+  const moved = await changeStoryStatus({ storyId, from: "draft", to: "generating", actor, ipAddress });
+  if (!moved) throw new AppError(409, "INVALID_STATUS_CHANGE", "This story is already being made");
   try {
     await ensureJob(storyId, "story_text");
     await ensureJob(storyId, "title");
   } catch (err) {
-    // The queue is down: put the story back so the child can try again.
+    // The queue is down: put the story back so the child can try again. This is the one move
+    // the lifecycle doesn't list (it undoes the one just made), so it's done here directly.
     logger.error({ err, storyId }, "Could not queue story generation");
     await Job.deleteMany({ storyId, status: "queued" });
-    await Story.updateOne({ _id: storyId, status: "generating" }, { $set: { status: "draft" } });
+    const undone = await Story.updateOne({ _id: storyId, status: "generating" }, { $set: { status: "draft" } });
+    if (undone.modifiedCount > 0) await auditStatus(storyId, "story.generate_undo", { role: "system" });
     throw new AppError(503, "GENERATION_NOT_READY", "We couldn't start making your story. Please try again.");
   }
 }
 
 // POST /stories/:id/generate/retry: only the jobs that failed every try go back on the list.
 export async function retryFailed(storyId: string): Promise<number> {
-  const failed = await Job.find({ storyId, status: "failed" }).lean();
+  // Not redraws: a failed redraw is asked for again with POST /panels/:n/redraw (BE-12).
+  const failed = await Job.find({ storyId, status: "failed", type: { $ne: "panel_redraw" } }).lean();
   if (failed.length === 0) throw new AppError(409, "CONFLICT", "Nothing to try again");
   for (const job of failed) {
     const claimed = await Job.updateOne({ _id: job._id, status: "failed" }, { $set: { status: "queued", error: null } });
@@ -78,18 +81,34 @@ export async function retryFailed(storyId: string): Promise<number> {
 // In-memory queue only (your PC): a restart forgets the list, so put unfinished jobs back.
 export async function recoverJobs(): Promise<void> {
   const generating = await Story.find({ status: "generating" }, { _id: 1 }).lean();
-  const jobs = await Job.find({ storyId: { $in: generating.map((s) => s._id) }, status: { $in: ["queued", "running"] } }).lean();
+  // Redraws (BE-12) run while the child reviews the story.
+  const reviewing = await Story.find({ status: "child_review" }, { _id: 1 }).lean();
+  const jobs = await Job.find({
+    $or: [
+      { storyId: { $in: generating.map((s) => s._id) } },
+      { storyId: { $in: reviewing.map((s) => s._id) }, type: "panel_redraw" },
+    ],
+    status: { $in: ["queued", "running"] },
+  }).lean();
   for (const job of jobs) await enqueueJob(String(job._id));
   if (jobs.length > 0) logger.info({ count: jobs.length }, "Put unfinished jobs back on the list");
 }
 
 // ---- Status (Final Climb FE-06, Book Progress Detail FE-15) ---------------------------------
 
-type StoryLike = { _id: unknown; status: string; storyPath?: string | null; panels: { number: number; textStatus: WorkStatus; imageStatus: WorkStatus }[] };
+type StoryLike = {
+  _id: unknown;
+  status: string;
+  storyPath?: string | null;
+  panels: { number: number; textStatus: WorkStatus; imageStatus: WorkStatus; redrawStatus?: WorkStatus | null }[];
+};
 
 async function buildStatus(story: StoryLike) {
   const storyId = String(story._id);
-  const jobs = await Job.find({ storyId }).sort({ createdAt: 1 }).lean();
+  const allJobs = await Job.find({ storyId }).sort({ createdAt: 1 }).lean();
+  // Making the story and redrawing one picture later (BE-12) are reported apart.
+  const jobs = allJobs.filter((j) => j.type !== "panel_redraw");
+  const redrawJobs = allJobs.filter((j) => j.type === "panel_redraw");
   const expected = story.storyPath ? PANEL_COUNT[story.storyPath as StoryPath] : 0;
   const textJob = jobs.find((j) => j.type === "story_text");
 
@@ -114,7 +133,24 @@ async function buildStatus(story: StoryLike) {
     .filter((j) => j.status === "failed")
     .map((j) => ({ type: j.type, panelNumber: j.panelNumber ?? null, error: j.error ?? null }));
 
-  return { jobs, payload: { storyId, status: story.status, progress, panels, failed, canRetry: story.status === "generating" && failed.length > 0 } };
+  // Redraws (BE-12): the latest one per panel. A failed one kept the old picture; the child
+  // can ask again (canRetry) while the story is still with them.
+  const redraws = story.panels
+    .filter((p) => p.redrawStatus)
+    .map((p) => {
+      const last = redrawJobs.filter((j) => j.panelNumber === p.number).at(-1);
+      return {
+        panelNumber: p.number,
+        status: p.redrawStatus!,
+        error: p.redrawStatus === "failed" ? (last?.error ?? null) : null,
+        canRetry: p.redrawStatus === "failed" && story.status === "child_review",
+      };
+    });
+
+  return {
+    jobs: allJobs,
+    payload: { storyId, status: story.status, progress, panels, failed, canRetry: story.status === "generating" && failed.length > 0, redraws },
+  };
 }
 
 /** What the child and the parent see. */

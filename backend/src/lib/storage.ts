@@ -34,6 +34,13 @@ function checkKey(key: string): void {
 export const panelImageKey = (storyId: string, panelNumber: number, ext: string) =>
   `stories/${storyId}/panel-${String(panelNumber).padStart(2, "0")}.${ext}`;
 
+/**
+ * The key for a REDRAWN picture (BE-12), e.g. "stories/665f…/panel-03-r6660….png". A new key
+ * per redraw job, so the old picture is never overwritten until the new one is ready.
+ */
+export const panelRedrawKey = (storyId: string, panelNumber: number, jobId: string, ext: string) =>
+  `stories/${storyId}/panel-${String(panelNumber).padStart(2, "0")}-r${jobId}.${ext}`;
+
 export interface SignedLink {
   url: string;
   expiresAt: Date;

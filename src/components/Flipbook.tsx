@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode, type SyntheticEvent } from "react";
 import { ArrowLeft, ArrowRight, Bookmark, Image as ImageIcon, MessageSquare, Sparkles } from "lucide-react";
 import { PANEL_LABELS } from "@/data/content";
 import { asset, feelingPose, heroArt, heroAvatar, movePose, strengthPose, toolPose } from "@/data/assets";
@@ -213,6 +213,8 @@ interface FaceCtx {
   author: string;
   edition: "Explorer" | "Creator";
   notes?: Record<number, string>;
+  /** The server's picture for a story part, when there is one (backend BE-10). */
+  imageFor?: (part: number) => string | null | undefined;
   /** Paper inset from the board edge, in px. */
   inset: number;
   imgClass: string;
@@ -241,8 +243,18 @@ function Ornament() {
   );
 }
 
-function Illustration({ part, story, className }: { part: number; story: StoryState; className?: string }) {
-  const art = pageArt(part, story);
+/** Pictures narrower than this are the stub AI's placeholder (a 1×1 PNG), not a real illustration. */
+const PLACEHOLDER_MAX_WIDTH = 16;
+
+function Illustration({ part, story, src, className }: { part: number; story: StoryState; src?: string | null; className?: string }) {
+  // The generated picture from our server wins; otherwise the sample artwork. On a PC running
+  // the stub AI (no fal.ai key) the server's picture is a tiny placeholder: show the sample art instead.
+  const [placeholderSrc, setPlaceholderSrc] = useState<string | null>(null);
+  const useServer = !!src && placeholderSrc !== src;
+  const art = useServer ? { src, scene: true } : pageArt(part, story);
+  const onLoad = (e: SyntheticEvent<HTMLImageElement>) => {
+    if (useServer && e.currentTarget.naturalWidth < PLACEHOLDER_MAX_WIDTH) setPlaceholderSrc(src);
+  };
   const label = `Illustration: ${PANEL_LABELS[part - 1]}`;
   if (!art.src) {
     return (
@@ -255,7 +267,7 @@ function Illustration({ part, story, className }: { part: number; story: StorySt
   if (art.scene) {
     return (
       <div className={className}>
-        <img src={art.src} alt={label} draggable={false} className="h-full w-full select-none object-cover" />
+        <img src={art.src} alt={label} draggable={false} onLoad={onLoad} className="h-full w-full select-none object-cover" />
       </div>
     );
   }
@@ -290,7 +302,7 @@ function PaperFace({ face, side, ctx }: { face: Face; side: Side; ctx: FaceCtx }
         <div className={C.content}>
           {face.opener && (
             <>
-              <Illustration part={face.part} story={story} className={cx(C.img, ctx.imgClass)} />
+              <Illustration part={face.part} story={story} src={ctx.imageFor?.(face.part)} className={cx(C.img, ctx.imgClass)} />
               <p className={C.label}>{PANEL_LABELS[face.part - 1]}</p>
               <div className={C.orn}>
                 <Ornament />
@@ -461,9 +473,11 @@ export interface FlipbookProps {
   onPositionChange?: (info: { part: number | null; atEnd: boolean }) => void;
   /** Replaces the "next" button on the last page (e.g. "I'm Done!"). */
   endAction?: ReactNode;
+  /** The server's picture for a story part (e.g. a signed link), or nothing for the sample art. */
+  imageFor?: (part: number) => string | null | undefined;
 }
 
-export function Flipbook({ textFor, editing = false, onTextChange, notes, onPositionChange, endAction }: FlipbookProps) {
+export function Flipbook({ textFor, editing = false, onTextChange, notes, onPositionChange, endAction, imageFor }: FlipbookProps) {
   const { story, heroName, mode } = useAppState();
   const spreadMode = useMediaQuery("(min-width: 768px)");
   // Reduced motion (e.g. Windows "Animation effects" off) keeps every control working, with a quicker, softer turn.
@@ -764,6 +778,7 @@ export function Flipbook({ textFor, editing = false, onTextChange, notes, onPosi
     author: story.authorName || "Author Name",
     edition: mode === "senior" ? "Creator" : "Explorer",
     notes,
+    imageFor,
     inset,
     imgClass,
   };

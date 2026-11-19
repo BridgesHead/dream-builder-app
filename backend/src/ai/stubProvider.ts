@@ -14,16 +14,20 @@ import type { AiProvider, AiResult } from "../jobs/providers.js";
  *   hangOnce.add("panel_image:3")       → the next try for panel 3 never finishes (a "crash")
  *   brokenPanel.set(6, 2)               → the next 2 times panel 6 is written, it comes out
  *                                          missing (so the engine asks for a rewrite)
- * Keys: "story_text", "title", "panel_image:<n>".
+ *   badRewrites = 2                     → the next 2 sentence rewrites break the rules
+ *                                          (two long sentences), so the rewriter asks again
+ * Keys: "story_text", "title", "panel_image:<n>", "panel_redraw:<n>", "rewrite".
  */
 export const stubControls = {
   failTimes: new Map<string, number>(),
   hangOnce: new Set<string>(),
   brokenPanel: new Map<number, number>(),
+  badRewrites: 0,
   reset(): void {
     this.failTimes.clear();
     this.hangOnce.clear();
     this.brokenPanel.clear();
+    this.badRewrites = 0;
   },
 };
 
@@ -109,6 +113,8 @@ function stubPanel(ctx: StoryContext, number: number): DraftPanel {
   return { number, text: text[role] };
 }
 
+const COMMON_STARTS = new Set(["the", "a", "an", "he", "she", "it", "they", "then", "there", "this", "that", "when", "with", "in", "on", "at"]);
+
 const stub = <T>(value: T): AiResult<T> => ({ value, provider: "stub", aiModel: "stub-v1", fallback: false, fallbackUsed: null, promptVersion: null });
 
 // A 1×1 PNG: the stub's "picture", saved to our storage like a real one.
@@ -133,8 +139,24 @@ export const stubProvider: AiProvider = {
     await stubStep("title");
     return stub(`${buildContext(story).heroName} and the ${story.aspiration.trim() || "Big Dream"}`);
   },
-  async panelImage(_story, panelNumber) {
-    await stubStep(`panel_image:${panelNumber}`);
+  async panelImage(_story, panelNumber, _text, variant = 0) {
+    // A redraw (BE-12) has its own key, so a test can fail a redraw on its own.
+    await stubStep(`${variant > 0 ? "panel_redraw" : "panel_image"}:${panelNumber}`);
     return stub({ body: new Uint8Array(PLACEHOLDER_PNG), contentType: "image/png", ext: "png" });
+  },
+  // A simple, rule-keeping rewrite: "Ember ran up the hill." → "Step by step, Ember ran up the hill."
+  // (shortened to the word limit). The real rewrite comes from fal.ai.
+  async rewriteSentence(_story, { sentence, maxWords }) {
+    await stubStep("rewrite");
+    if (stubControls.badRewrites > 0) {
+      stubControls.badRewrites -= 1;
+      return stub(`${sentence} And then it all went on and on. ${"Very ".repeat(maxWords)}long.`);
+    }
+    const body = sentence.trim().replace(/[.!?]+$/, "");
+    // "The fox ran." → "…, the fox ran." but "Ember ran." keeps its capital (it's a name).
+    const first = body.split(/\s+/)[0] ?? "";
+    const lower = COMMON_STARTS.has(first.toLowerCase()) ? first.toLowerCase() + body.slice(first.length) : body;
+    const words = `Step by step, ${lower}`.split(/\s+/).slice(0, maxWords);
+    return stub(`${words.join(" ").replace(/[,;:]+$/, "")}.`);
   },
 };
