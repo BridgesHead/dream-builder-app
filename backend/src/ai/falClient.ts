@@ -1,10 +1,14 @@
 import { config } from "../config.js";
 import { IMAGE_TYPES } from "../lib/storage.js";
+import { anonymise, findLeaks, NO_FAMILY, type FamilyDetails } from "./anonymise.js";
 
 // THE one door to fal.ai (guide BE-10). Every fal.ai call goes through here, so:
 //   - the secret key is added in one place and never logged
 //   - every call has a time limit (a stuck call can't hold a worker)
-//   - BE-14 adds the anonymising gate in this same place
+//   - every call passes the anonymising GATE (guide BE-14): askText and drawImage can only be
+//     called with a gate, which cleans the text, refuses to send if anything identifying is
+//     left, and keeps the cleaned text for the job record. The raw falPost is NOT exported,
+//     and a test (tests/unit/falGate.test.ts) fails if any other file talks to fal.ai.
 //
 // Rate limit: the queue already starts at most AI_CALLS_PER_SECOND jobs per second, shared by
 // all workers (BE-07).
@@ -19,8 +23,44 @@ export class FalError extends Error {
   }
 }
 
-async function falPost<T>(endpoint: string, body: unknown): Promise<T> {
+/** One cleaned request, as it was sent (saved on the job: the anonymised prompt only). */
+export interface SentRequest {
+  endpoint: string;
+  text: string;
+}
+
+/** The gate for one job's AI calls: who to protect, and what was sent. */
+export interface FalGate {
+  family: FamilyDetails;
+  /** The name the AI knows the hero by (the real hero name, or the stand-in). */
+  heroAlias: string;
+  sent: SentRequest[];
+}
+
+export function createGate(family: FamilyDetails = NO_FAMILY, heroAlias: string): FalGate {
+  return { family, heroAlias, sent: [] };
+}
+
+/** Cleans every text field of a request body, then checks nothing identifying is left. */
+function pass(gate: FalGate, endpoint: string, body: Record<string, unknown>): Record<string, unknown> {
+  const clean: Record<string, unknown> = { ...body };
+  const texts: string[] = [];
+  for (const [key, value] of Object.entries(clean)) {
+    if (typeof value !== "string") continue;
+    const cleaned = anonymise(value, gate.family, gate.heroAlias);
+    clean[key] = cleaned;
+    texts.push(cleaned);
+  }
+  const leaks = findLeaks(texts.join("\n"), gate.family, gate.heroAlias);
+  // The kinds only: the error (and so the job record and the logs) never holds the detail itself.
+  if (leaks.length > 0) throw new FalError(`Not sent to fal.ai: the request still had ${leaks.join(", ")}`, null);
+  gate.sent.push({ endpoint, text: texts.join("\n\n") });
+  return clean;
+}
+
+async function falPost<T>(gate: FalGate, endpoint: string, rawBody: Record<string, unknown>): Promise<T> {
   if (!config.fal.key) throw new FalError("FAL_KEY is not set", null);
+  const body = pass(gate, endpoint, rawBody);
   let res: Response;
   try {
     res = await fetch(`${config.fal.baseUrl}/${endpoint}`, {
@@ -34,29 +74,30 @@ async function falPost<T>(endpoint: string, body: unknown): Promise<T> {
     throw new FalError(`fal.ai ${endpoint} ${why}`, null);
   }
   if (!res.ok) {
-    // A short reason only: fal.ai's reply, cut down. Never the request (it holds the prompt).
-    const detail = (await res.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 200);
+    // A short reason only: fal.ai's reply, cut down and cleaned (it could repeat our request).
+    const detail = anonymise((await res.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 200), gate.family, gate.heroAlias);
     throw new FalError(`fal.ai ${endpoint} answered ${res.status}${detail ? `: ${detail}` : ""}`, res.status);
   }
   return (await res.json()) as T;
 }
 
 /** Text from the LLM (fal-ai/any-llm). */
-export async function askText(input: { system: string; prompt: string }): Promise<string> {
-  const reply = await falPost<{ output?: unknown; error?: unknown }>(config.fal.textEndpoint, {
+export async function askText(gate: FalGate, input: { system: string; prompt: string }): Promise<string> {
+  const reply = await falPost<{ output?: unknown; error?: unknown }>(gate, config.fal.textEndpoint, {
     model: config.fal.textModel,
     system_prompt: input.system,
     prompt: input.prompt,
   });
   if (typeof reply.output !== "string" || reply.output.trim() === "") {
-    throw new FalError(`fal.ai ${config.fal.textEndpoint} gave no text${reply.error ? `: ${String(reply.error).slice(0, 200)}` : ""}`, null);
+    const why = reply.error ? `: ${anonymise(String(reply.error).slice(0, 200), gate.family, gate.heroAlias)}` : "";
+    throw new FalError(`fal.ai ${config.fal.textEndpoint} gave no text${why}`, null);
   }
   return reply.output;
 }
 
 /** One FLUX picture. Returns fal.ai's TEMPORARY link: download it, never store it. */
-export async function drawImage(input: { prompt: string; seed: number }): Promise<string> {
-  const reply = await falPost<{ images?: { url?: unknown }[] }>(config.fal.imageModel, {
+export async function drawImage(gate: FalGate, input: { prompt: string; seed: number }): Promise<string> {
+  const reply = await falPost<{ images?: { url?: unknown }[] }>(gate, config.fal.imageModel, {
     prompt: input.prompt,
     seed: input.seed,
     image_size: "landscape_4_3",
@@ -81,7 +122,7 @@ function downloadable(url: string): boolean {
   }
 }
 
-/** Downloads fal.ai's picture so we can keep our own copy. */
+/** Downloads fal.ai's picture so we can keep our own copy. Sends nothing about the child. */
 export async function downloadImage(url: string): Promise<{ body: Uint8Array; contentType: string; ext: string }> {
   if (!downloadable(url)) throw new FalError("fal.ai gave a picture link we won't download", null);
   let res: Response;

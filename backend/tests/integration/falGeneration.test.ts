@@ -23,7 +23,9 @@ const app = createApp();
 let worker: RunningWorker | null = null;
 let fal: FakeFal;
 
-// The child named the hero "Zara" (it could be their own name), so "Zara" must never reach fal.ai.
+// The child, Zara, named the hero after herself, so "Zara" must never reach fal.ai: the AI
+// sees the stand-in (BE-14: a hero name that isn't a family name does reach the model; see
+// tests/integration/anonymisation.test.ts).
 const HERO = "Zara";
 
 /** What the fake AI writes: the good sample story, using the stand-in name like the real AI would. */
@@ -67,7 +69,7 @@ const settled = (id: string) => async () => (await Job.countDocuments({ storyId:
 async function startStory(answers: StoryAnswers = EMBER_ANSWERS, draft = EMBER_THREE_ACT) {
   fal.story = aiStory(draft);
   const parent = await makeUser("parent");
-  const childId = await makeChild(parent.id);
+  const childId = await makeChild(parent.id, HERO);
   const story = await Story.create({ childId, ...answers, charName: HERO });
   const id = String(story._id);
   await beginGeneration(id, { role: "child_session", parentId: parent.id });
@@ -108,7 +110,7 @@ describe("BE-10 generation through fal.ai (fake server)", () => {
     }
   });
 
-  it("the hero's name never reaches fal.ai (decision 6A)", async () => {
+  it("a hero named after the child never reaches fal.ai (decision 6A, BE-14)", async () => {
     const { id } = await startStory();
     await waitFor(async () => (await Story.findById(id).lean())!.status === "child_review");
     expect(fal.requests.length).toBeGreaterThan(17);

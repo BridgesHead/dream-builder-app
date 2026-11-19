@@ -1,3 +1,5 @@
+import type { FamilyDetails } from "../ai/anonymise.js";
+import type { SentRequest } from "../ai/falClient.js";
 import { falProvider } from "../ai/falProvider.js";
 import { stubProvider } from "../ai/stubProvider.js";
 import { config } from "../config.js";
@@ -9,12 +11,17 @@ import type { DraftPanel, StoryAnswers } from "../engine/index.js";
 //   AI_PROVIDER=fal    the real AI (src/ai/falProvider.ts)
 //   AI_PROVIDER=stub   a fake AI for tests and PCs without a fal.ai key (src/ai/stubProvider.ts)
 //
-// BE-14 puts every fal.ai call through the anonymising gate (src/ai/falClient.ts).
+// Every fal.ai call goes through the anonymising gate (BE-14, src/ai/falClient.ts).
 
 export { stubControls } from "../ai/stubProvider.js";
 
-/** What the provider needs to know about a story: the child's answers, plus its id. */
-export type StoryForAi = StoryAnswers & { id: string };
+/**
+ * What the provider needs to know about a story: the child's answers, plus its id, plus the
+ * family's details for the anonymising gate (BE-14) to keep OUT of every request. Without
+ * `family` the gate still removes emails, phones, links, addresses and schools, and the AI
+ * sees the hero's stand-in name.
+ */
+export type StoryForAi = StoryAnswers & { id: string; family?: FamilyDetails };
 
 export interface AiResult<T> {
   value: T;
@@ -26,6 +33,8 @@ export interface AiResult<T> {
   fallbackUsed: string | null;
   /** Which version of our prompts made it (null for the stub). */
   promptVersion: string | null;
+  /** What was sent to the AI, AFTER anonymising (BE-14). The job keeps these. Empty for the stub. */
+  aiRequests?: SentRequest[];
 }
 
 /** A panel the engine wants rewritten, and why. */

@@ -161,7 +161,7 @@ engine leaves them out of every check and repair.
 | **Scene Director** | The AI that describes what each picture shows. If it fails: the **Visual Brief** table, then **Universal Triumph** (recorded as a fallback). | `src/ai/falProvider.ts`, `src/engine/visual.ts` |
 | **Character Blueprint** | The hero's fixed look on every picture (the robot's porthole eye and brass torso). | `src/engine/visual.ts` |
 | **Seed** | A fixed number from hero name + dream, the same for every panel, so FLUX keeps the hero looking the same. | `seedFor`, `visual.ts` |
-| **Stand-in name** | "Tibbo": what the AI sees instead of the hero's real name; the real name is put back afterwards. | `src/ai/prompts.ts` |
+| **Stand-in name** | "Tibbo": what the AI sees instead of the hero's name when that name is one of the family's (BE-14); the real name is put back afterwards. A made-up hero name reaches the AI as it is. | `src/ai/prompts.ts` (`aiNameFor`) |
 | **Engine** | The story rules checker. No HTTP, no database. | `src/engine/` |
 | **Director** | The instructions the AI gets, panel by panel and beat by beat. | `src/engine/director.ts` |
 | **Draft panel** | A panel as the AI sends it: `{ number, text }`, or `{ number, beats: [8 sentences] }` for panels 5 and 9. | `DraftPanel` |

@@ -5,6 +5,7 @@ import { logger } from "../lib/logger.js";
 import { getStorage, panelImageKey, panelRedrawKey } from "../lib/storage.js";
 import { ensureJob, finishIfDone } from "../services/generation.js";
 import { PANEL_COUNT, type StoryPath, type StoryStatus } from "../types/story.js";
+import { familyDetailsFor } from "./privacy.js";
 import { getProvider, type AiResult, type StoryForAi } from "./providers.js";
 import { StoryRulesError, writeStoryText } from "./storyText.js";
 import type { Attempt } from "./queue.js";
@@ -129,6 +130,21 @@ const HANDLERS: Partial<Record<JobDoc["type"], Handler>> = {
   // comic_script and comic_cell_image arrive in BE-11.
 };
 
+/** The last requests that fit in AI_REQUESTS_MAX_CHARS (a story's text prompt is ~10–15 KB). */
+const AI_REQUESTS_MAX_CHARS = 20_000;
+function keepRecent(sent: { endpoint: string; text: string }[]) {
+  const kept: { endpoint: string; text: string }[] = [];
+  let size = 0;
+  for (const r of [...sent].reverse()) {
+    const room = AI_REQUESTS_MAX_CHARS - size;
+    if (room <= 0) break;
+    const text = r.text.length > room ? r.text.slice(0, room) : r.text;
+    kept.unshift({ endpoint: r.endpoint, text });
+    size += text.length;
+  }
+  return kept;
+}
+
 class Timeout extends Error {}
 
 function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
@@ -201,6 +217,8 @@ export async function runJob(jobId: string, { attempt, isLastAttempt }: Attempt)
       heroWords3: story.heroWords3,
       safePlaceText: story.safePlaceText,
       thirdChallengeText: story.thirdChallengeText,
+      // For the anonymising gate (BE-14): what to keep out of every AI request.
+      family: await familyDetailsFor(story),
     };
     const result = await withTimeout(handler.run(job, forAi, story), handler.timeoutMs());
     await Job.updateOne(mine, {
@@ -210,6 +228,8 @@ export async function runJob(jobId: string, { attempt, isLastAttempt }: Attempt)
         aiModel: result.aiModel,
         promptVersion: result.promptVersion,
         fallbackUsed: result.fallbackUsed,
+        // The anonymised requests only (BE-14), newest kept if they're long.
+        aiRequests: keepRecent(result.aiRequests ?? []),
         durationMs: Date.now() - started,
         error: null,
       },

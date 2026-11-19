@@ -1,6 +1,7 @@
 import { config } from "../config.js";
 import { Comment, Job, Story, User } from "../db/models/index.js";
 import { cleanRewrite, rewriteProblems } from "../engine/index.js";
+import { familyDetailsFor } from "../jobs/privacy.js";
 import { getProvider, type StoryForAi } from "../jobs/providers.js";
 import { enqueueJob } from "../jobs/queue.js";
 import { AppError } from "../lib/errors.js";
@@ -59,8 +60,10 @@ function panelNumberOf(story: { storyPath?: string | null }, raw: string): numbe
 }
 
 /** The child's answers, as the AI provider needs them (the same shape the jobs use). */
-function forAi(story: Awaited<ReturnType<typeof findReachableStory>>): StoryForAi {
+async function forAi(story: Awaited<ReturnType<typeof findReachableStory>>): Promise<StoryForAi> {
   return {
+    // For the anonymising gate (BE-14): what to keep out of the AI request.
+    family: await familyDetailsFor(story),
     id: String(story._id),
     storyPath: story.storyPath as StoryPath,
     mode: story.mode,
@@ -209,11 +212,12 @@ export async function rewriteSentence(caller: ChildCaller, storyId: string, rawN
 
   const maxWords = config.review.rewriteMaxWords;
   const provider = getProvider();
+  const aiStory = await forAi(story);
   let problems: string[] = [];
   for (let attempt = 0; attempt < config.review.rewriteAttempts; attempt += 1) {
     let answer: string;
     try {
-      const result = await provider.rewriteSentence(forAi(story), { sentence, panelText: panel.text, maxWords, attempt, problems });
+      const result = await provider.rewriteSentence(aiStory, { sentence, panelText: panel.text, maxWords, attempt, problems });
       answer = cleanRewrite(result.value);
     } catch (err) {
       // The AI call itself failed: count it as a try and go again.

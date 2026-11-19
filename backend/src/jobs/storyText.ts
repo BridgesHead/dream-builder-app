@@ -42,6 +42,8 @@ const toViolation = (f: Finding, fixedBy: Violation["fixedBy"]): Violation => ({
 export async function writeStoryText(provider: AiProvider, story: StoryForAi) {
   const ctx = buildContext(story);
   const first = await provider.storyText(story);
+  // Every anonymised request of this job, for the job record (BE-14).
+  const aiRequests = [...(first.aiRequests ?? [])];
   let draft: DraftPanel[] = first.value;
   const repaired = new Map<string, Finding>();
   const sentBack = new Map<string, Finding>();
@@ -59,7 +61,7 @@ export async function writeStoryText(provider: AiProvider, story: StoryForAi) {
     if (result.fatal) throw new StoryRulesError(result.fatal, violations([]));
     if (result.rewrite.length === 0) {
       const { provider, aiModel, fallback, fallbackUsed, promptVersion } = first;
-      return { provider, aiModel, fallback, fallbackUsed, promptVersion, panels: result.panels, violations: violations([]) };
+      return { provider, aiModel, fallback, fallbackUsed, promptVersion, aiRequests, panels: result.panels, violations: violations([]) };
     }
     if (round === MAX_REWRITE_ROUNDS) {
       const reasons = result.rewrite.map((f) => `${f.rule} (panel ${f.panelNumber}): ${f.message}`).join("; ");
@@ -68,7 +70,9 @@ export async function writeStoryText(provider: AiProvider, story: StoryForAi) {
 
     // Ask the AI to rewrite only the panels the engine sent back.
     for (const f of result.rewrite) sentBack.set(spot(f), f);
-    const fresh = (await provider.rewritePanels(story, rewriteRequests(result.rewrite), draft)).value;
+    const rewritten = await provider.rewritePanels(story, rewriteRequests(result.rewrite), draft);
+    aiRequests.push(...(rewritten.aiRequests ?? []));
+    const fresh = rewritten.value;
     draft = [...draft.filter((p) => !fresh.some((n) => n.number === p.number)), ...fresh].sort((x, y) => x.number - y.number);
   }
 }

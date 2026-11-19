@@ -38,7 +38,7 @@ function jsonIn(raw: string): unknown {
  * The panels from the AI's answer. `expected` = the panel numbers asked for (1–12 or 1–15 for
  * a whole story; only the sent-back ones for a rewrite). The hero's real name is put back in.
  */
-export function readStoryPanels(raw: string, expected: number[], heroName: string): DraftPanel[] {
+export function readStoryPanels(raw: string, expected: number[], heroName: string, alias?: string): DraftPanel[] {
   const parsed = storyJson.safeParse(jsonIn(raw));
   if (!parsed.success) throw new StoryJsonError("The AI's JSON didn't have the panel shape");
   const panels = parsed.data.panels;
@@ -50,7 +50,7 @@ export function readStoryPanels(raw: string, expected: number[], heroName: strin
   return panels
     .map((p) => ({
       number: p.number,
-      ...(p.beats ? { beats: p.beats.map((b) => revealName(b, heroName)) } : { text: revealName(p.text ?? "", heroName) }),
+      ...(p.beats ? { beats: p.beats.map((b) => revealName(b, heroName, alias)) } : { text: revealName(p.text ?? "", heroName, alias) }),
     }))
     .sort((a, b) => a.number - b.number);
 }

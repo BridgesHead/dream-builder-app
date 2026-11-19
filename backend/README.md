@@ -333,7 +333,7 @@ title        "[HeroName] and the [Poetic Version of the Dream]"; the formula if 
 | `src/lib/storage.ts` | Saves pictures (S3 in the UAE, or `data/storage` on your PC) and makes signed links. |
 | `src/routes/media.ts` | Serves local-folder pictures by signed link (your PC only). |
 
-- **The hero's name never goes to fal.ai.** The AI sees the stand-in "Tibbo"; the real name is put back in its answer.
+- **Nothing identifying goes to fal.ai (BE-14).** Every call passes the anonymising gate (`src/ai/anonymise.ts`, `src/ai/falClient.ts`): the child's, parent's and author's names, emails, phones, addresses, links and school names are taken out, and the gate refuses to send if any known detail is left. The AI sees the hero's real name, unless it's a family name; then the stand-in "Tibbo". Jobs keep only the cleaned requests (`aiRequests`).
 - **Pictures:** the story stores only the key. `GET /api/v1/stories/:id` gives each panel an `imageUrl`, and
   `GET /api/v1/stories/:id/panels/:number/image` gives `{ url, expiresAt }`. Links expire after an hour.
 - **Records on every job:** `provider`, `aiModel`, `promptVersion`, `fallbackUsed` (`visual_brief`,
@@ -356,7 +356,6 @@ To make a real story on your PC: put `AI_PROVIDER=fal` and `FAL_KEY=...` in `.en
 | Text model not confirmed | BE-10 | The PRD's Gemini Flash 1.5 is retired; `FAL_TEXT_MODEL` defaults to `google/gemini-2.5-flash`. Sami Bhai picks. |
 | Our own prompts (v1) | BE-10 | Written from the director and the PRD. Replace with the prototype's prompts (v2) if Sami Bhai sends them. |
 | Picture tables are starters | BE-10 | Blueprints, costumes, Visual Briefs and poetic dream names in `src/engine/visual.ts`. |
-| Only the hero's name is hidden | BE-14 | Other free text (dream, safe place, child's words) still goes to fal.ai as typed until BE-14. |
 | The UAE bucket | AWS-01 | Sami Bhai creates it; production refuses to start without `S3_BUCKET`. Until then pictures go to `data/storage`. |
 | Review of 3 real stories | BE-10 | Sami Bhai checks the hero keeps the same look, name and pronoun across panels. Needs a fal.ai key. |
 | "Marked failed" after the last try | BE-07 / BE-10 | The story waits in `generating` with the failed job and "Try again" (no `failed` story status in the guide's lifecycle). |

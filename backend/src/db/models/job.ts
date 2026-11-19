@@ -45,6 +45,12 @@ const jobSchema = new Schema(
     // ("visual_brief", "universal_triumph", "title_formula"). Then status is "fallback".
     promptVersion: { type: String, maxlength: 20, default: null },
     fallbackUsed: { type: String, maxlength: 50, default: null },
+    // What was sent to the AI, AFTER the anonymising gate (BE-14): never the raw prompt.
+    // At most ~20,000 characters in total (the newest requests are kept).
+    aiRequests: {
+      type: [new Schema({ endpoint: { type: String, maxlength: 200 }, text: { type: String, maxlength: 20_000 } }, subdocumentOptions)],
+      default: [],
+    },
     attempts: { type: Number, min: 0, required: true, default: 0 },
     // A short reason when status is "failed" (or why the last try failed, while retrying).
     error: { type: String, maxlength: 1000, default: null },

@@ -2,6 +2,7 @@ import { directStory } from "../engine/director.js";
 import type { StoryContext } from "../engine/context.js";
 import type { PanelPlan } from "../engine/plan.js";
 import type { DraftPanel } from "../engine/types.js";
+import { familyNameWords, type FamilyDetails } from "./anonymise.js";
 
 // The words we send to the AI (guide BE-10). The STRUCTURE comes from the story director
 // (BE-09); this file wraps it into the messages fal.ai gets.
@@ -11,31 +12,41 @@ import type { DraftPanel } from "../engine/types.js";
 // prototype's prompts, if Sami Bhai sends them, become "v2").
 export const PROMPT_VERSION = "v1";
 
-// ---- Hiding the hero's name (decision 6A, before BE-14) ----------------------------------
-// The child may name the hero after themselves, so the AI never sees the hero's name: it
-// sees a made-up stand-in, and we put the real name back in its answer.
+// ---- The hero's name in prompts (decision 6A, then BE-14) --------------------------------
+// The guide (BE-14) wants the hero's name to reach the model. But a child may name the hero
+// after themselves ("Aisha"), so when the hero's name is one of the FAMILY's names, the AI
+// sees a made-up stand-in instead, and we put the real name back in its answer.
+//   aiName = the hero's real name       (a made-up hero name, e.g. "Sparkle")
+//   aiName = STAND_IN ("Tibbo")         (the hero is named after someone in the family,
+//                                         or we don't know the family: the safe default)
+// The anonymising gate (anonymise.ts, falClient.ts) then cleans everything else.
 export const STAND_IN = "Tibbo";
+
+/** The story context, plus the name the AI knows the hero by. */
+export type PromptContext = StoryContext & { aiName?: string };
+const aliasOf = (ctx: PromptContext) => ctx.aiName ?? STAND_IN;
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const wordPattern = (word: string) => new RegExp(`(?<![\\p{L}\\p{N}])${escape(word)}(?![\\p{L}\\p{N}])`, "gu");
 
-/** The hero's name → the stand-in (exact case, whole words only). */
-export function hideName(text: string, heroName: string): string {
-  return heroName && heroName !== STAND_IN ? text.replace(wordPattern(heroName), STAND_IN) : text;
+/** The hero's name → the name the AI sees (exact case, whole words only). */
+export function hideName(text: string, heroName: string, alias = STAND_IN): string {
+  return heroName && heroName !== alias ? text.replace(wordPattern(heroName), alias) : text;
 }
-/** The stand-in → the hero's name. */
-export function revealName(text: string, heroName: string): string {
-  return text.replace(wordPattern(STAND_IN), heroName);
+/** The name the AI saw → the hero's name. */
+export function revealName(text: string, heroName: string, alias = STAND_IN): string {
+  return alias === heroName ? text : text.replace(wordPattern(alias), heroName);
 }
 
-/** The context the prompts are built from: the same story, with the hero's name hidden. */
-function hidden(ctx: StoryContext): StoryContext {
-  const hide = (s: string) => hideName(s, ctx.heroName);
+/** The context the prompts are built from: the same story, with the hero's name as the AI sees it. */
+function hidden(ctx: PromptContext): StoryContext {
+  const alias = aliasOf(ctx);
+  const hide = (s: string) => hideName(s, ctx.heroName, alias);
   return {
     ...ctx,
-    heroName: STAND_IN,
+    heroName: alias,
     heroWords: { 1: hide(ctx.heroWords[1]), 2: hide(ctx.heroWords[2]), 3: hide(ctx.heroWords[3]) },
-    answers: { ...ctx.answers, charName: STAND_IN, safePlaceText: hide(ctx.answers.safePlaceText), oneMoreAmazingThing: hide(ctx.answers.oneMoreAmazingThing) },
+    answers: { ...ctx.answers, charName: alias, safePlaceText: hide(ctx.answers.safePlaceText), oneMoreAmazingThing: hide(ctx.answers.oneMoreAmazingThing) },
   };
 }
 
@@ -46,7 +57,7 @@ export interface Prompt {
 
 const JSON_ONLY = "Answer with JSON only: no markdown, no explanation before or after it.";
 
-function storySystem(ctx: StoryContext): string {
+function storySystem(ctx: PromptContext): string {
   const brief = directStory(hidden(ctx));
   return [
     "You write warm, gentle picture-book stories for children aged 8 to 14, in British English.",
@@ -66,7 +77,7 @@ const panelBrief = (p: ReturnType<typeof directStory>["panels"][number]) => ({
 });
 
 /** The whole story, panel by panel. */
-export function storyTextPrompt(ctx: StoryContext): Prompt {
+export function storyTextPrompt(ctx: PromptContext): Prompt {
   const brief = directStory(hidden(ctx));
   return {
     system: storySystem(ctx),
@@ -82,9 +93,9 @@ export function storyTextPrompt(ctx: StoryContext): Prompt {
 }
 
 /** Only the panels the story engine sent back, with the reasons. */
-export function rewritePrompt(ctx: StoryContext, requests: { panelNumber: number; reasons: string[] }[], current: DraftPanel[]): Prompt {
+export function rewritePrompt(ctx: PromptContext, requests: { panelNumber: number; reasons: string[] }[], current: DraftPanel[]): Prompt {
   const brief = directStory(hidden(ctx));
-  const hide = (s: string) => hideName(s, ctx.heroName);
+  const hide = (s: string) => hideName(s, ctx.heroName, aliasOf(ctx));
   const asked = requests.map((r) => {
     const now = current.find((p) => p.number === r.panelNumber);
     return {
@@ -105,45 +116,46 @@ export function rewritePrompt(ctx: StoryContext, requests: { panelNumber: number
 }
 
 /** "[HeroName] and the [Poetic Version of the Dream]" (PRD F12). */
-export function titlePrompt(ctx: StoryContext): Prompt {
+export function titlePrompt(ctx: PromptContext): Prompt {
+  const alias = aliasOf(ctx);
   return {
     system: "You name children's picture books. Answer with the title only, on one line.",
     prompt: [
-      `The hero is called ${STAND_IN}. The child's dream: "${hideName(ctx.answers.aspiration, ctx.heroName)}".`,
-      `Write the title in exactly this form: ${STAND_IN} and the [a short poetic name for the dream].`,
-      `For example "${STAND_IN} and the Silver Stars" for a dream of becoming an astronaut.`,
+      `The hero is called ${alias}. The child's dream: "${hideName(ctx.answers.aspiration, ctx.heroName, alias)}".`,
+      `Write the title in exactly this form: ${alias} and the [a short poetic name for the dream].`,
+      `For example "${alias} and the Silver Stars" for a dream of becoming an astronaut.`,
       'Two to five words after "the", each starting with a capital letter. No quotes, no full stop.',
     ].join("\n"),
   };
 }
 
 /** Step 1 of the Scene Director chain: the AI describes the picture for one panel. */
-export function scenePrompt(ctx: StoryContext, plan: PanelPlan, panelText: string): Prompt {
+export function scenePrompt(ctx: PromptContext, plan: PanelPlan, panelText: string): Prompt {
   const world = ctx.world ? `${ctx.world.name} (${ctx.world.words.slice(0, 4).join(", ")})` : "the child's dream world";
   return {
     system: "You are the Scene Director for a children's picture book. You describe what one illustration shows.",
     prompt: [
       `Panel ${plan.number}: ${plan.label}. The story is set in ${world}.`,
-      `The panel's text: "${hideName(panelText, ctx.heroName)}"`,
+      `The panel's text: "${hideName(panelText, ctx.heroName, aliasOf(ctx))}"`,
       "Describe in ONE sentence of at most 40 words what the picture shows: the hero's action, the setting and the mood.",
       'Call the hero "the hero". Never use any names. Nothing written in the picture. Answer with the sentence only.',
     ].join("\n"),
   };
 }
 
-const TITLE_SHAPE = new RegExp(`^${STAND_IN} and the ((?:[A-Z][\\p{L}'’-]*)(?: [\\p{L}'’-]+){0,4})$`, "u");
+const titleShape = (alias: string) => new RegExp(`^${escape(alias)} and the ((?:[A-Z][\\p{L}'’-]*)(?: [\\p{L}'’-]+){0,4})$`, "u");
 
 /** The AI's title if it has the right shape, with the real name back in; else null. */
-export function readTitle(raw: string, heroName: string): string | null {
+export function readTitle(raw: string, heroName: string, alias = STAND_IN): string | null {
   const line = raw.trim().split(/\r?\n/)[0].trim().replace(/^["'“‘]+|["'”’.]+$/g, "").trim();
-  return TITLE_SHAPE.test(line) ? revealName(line, heroName) : null;
+  return titleShape(alias).test(line) ? revealName(line, heroName, alias) : null;
 }
 
 /** The AI's scene if it's usable; else null (the chain moves on to the Visual Brief table). */
-export function readScene(raw: string): string | null {
+export function readScene(raw: string, alias = STAND_IN): string | null {
   const scene = raw.trim().replace(/^["'“]+|["'”]+$/g, "").replace(/\s+/g, " ");
   if (scene.length < 10 || scene.length > 400) return null;
-  return scene.replace(wordPattern(STAND_IN), "the hero");
+  return scene.replace(wordPattern(alias), "the hero");
 }
 
 /**
@@ -152,10 +164,10 @@ export function readScene(raw: string): string | null {
  * again, with the reasons, when it breaks a rule.
  */
 export function rewriteSentencePrompt(
-  ctx: StoryContext,
+  ctx: PromptContext,
   input: { sentence: string; panelText: string; maxWords: number; problems: string[] },
 ): Prompt {
-  const hide = (s: string) => hideName(s, ctx.heroName);
+  const hide = (s: string) => hideName(s, ctx.heroName, aliasOf(ctx));
   return {
     system: [
       "You help a child aged 12 to 14 polish one sentence of their own picture-book story, in British English.",
@@ -171,4 +183,17 @@ export function rewriteSentencePrompt(
       ...(input.problems.length ? [`Your last answer was refused because it ${input.problems.join(", and ")}. Fix that.`] : []),
     ].join("\n"),
   };
+}
+
+/**
+ * The name the AI knows the hero by (BE-14): the hero's real name, unless it is (or contains)
+ * one of the family's names, or we don't know the family; then the stand-in.
+ */
+export function aiNameFor(heroName: string, family: FamilyDetails): string {
+  const familyWords = familyNameWords(family);
+  if (familyWords.size === 0 || !heroName.trim()) return STAND_IN;
+  const heroWords = heroName.toLowerCase().split(/[\s-]+/);
+  if (heroWords.some((w) => familyWords.has(w)) || familyWords.has(heroName.toLowerCase())) return STAND_IN;
+  // A hero that happens to be called "Tibbo" keeps the stand-in rules simple.
+  return heroName === STAND_IN ? STAND_IN : heroName;
 }
