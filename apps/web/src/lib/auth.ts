@@ -3,14 +3,10 @@
 import { api, refreshAccessToken, setAccessToken } from "./api";
 import type { ServerChild } from "./children";
 
-/** The parent as the server describes them. */
-export interface AuthUser {
-  id: string;
-  name: string;
-  email: string;
-  role: "parent" | "facilitator" | "admin";
-  emailVerified: boolean;
-}
+import type { User } from "@dream-builder/api-types";
+
+/** The parent as the server describes them (from the API contract, openapi.yaml). */
+export type AuthUser = User;
 
 interface SessionResponse {
   user: AuthUser;

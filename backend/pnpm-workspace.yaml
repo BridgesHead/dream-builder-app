@@ -1,6 +1,0 @@
-allowBuilds:
-  esbuild: true
-  argon2: true
-  # An optional native speed-up for BullMQ's message encoding. BullMQ works without it
-  # (plain JavaScript fallback), so its install script is not run.
-  msgpackr-extract: false

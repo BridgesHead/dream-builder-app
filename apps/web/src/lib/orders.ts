@@ -1,24 +1,16 @@
 // Orders and payment (backend BE-17). Parents only. The price always comes from the server:
 // the browser only says WHICH book, and Stripe's own page takes the card (never our page).
+import type * as Api from "@dream-builder/api-types";
 import { api } from "./api";
 import type { PlanId } from "@/data/content";
 
-export type PaymentStatus = "pending" | "paid" | "failed" | "cancelled";
+/** An order as the server describes it (from the API contract, openapi.yaml). Amounts in AED. */
+export type ServerOrder = Api.Order;
 
-export interface ServerOrder {
-  id: string;
-  orderNumber: string;
-  storyId: string;
-  tier: PlanId;
-  /** In AED. */
-  amount: number;
-  currency: "AED";
-  paymentStatus: PaymentStatus;
-  printStatus: string;
-  paidAt: string | null;
-  createdAt: string;
-}
+export type PaymentStatus = ServerOrder["paymentStatus"];
 
+/** The checkout form's address. Kept here (not from the contract) because the form holds the
+ * emirate as plain text while typing; the server checks it against the Emirate list. */
 export interface DeliveryAddress {
   fullName: string;
   phone: string;
@@ -29,12 +21,9 @@ export interface DeliveryAddress {
   postalCode?: string;
 }
 
-export const EMIRATES = ["Abu Dhabi", "Dubai", "Sharjah", "Ajman", "Umm Al Quwain", "Ras Al Khaimah", "Fujairah"] as const;
+export const EMIRATES = ["Abu Dhabi", "Dubai", "Sharjah", "Ajman", "Umm Al Quwain", "Ras Al Khaimah", "Fujairah"] as const satisfies readonly Api.Emirate[];
 
-export interface Prices {
-  currency: "AED";
-  tiers: { tier: PlanId; name: string; price: number; delivery: number; total: number }[];
-}
+export type Prices = Api.Prices;
 
 export async function getPrices(): Promise<Prices> {
   return api<Prices>("/orders/prices");

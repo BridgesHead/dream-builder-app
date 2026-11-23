@@ -1,8 +1,11 @@
 node_modules
 dist
 *.tsbuildinfo
+.turbo
 
-server/node_modules
-server/.env
-server/data
-server/dist
+# Secrets and local data never go in git
+.env
+apps/api/data
+
+# Local tool state
+.netlify

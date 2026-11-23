@@ -1,0 +1,4 @@
+{
+  "extends": "@dream-builder/config/tsconfig.base.json",
+  "include": ["src", "tests", "scripts"]
+}

@@ -1,20 +1,12 @@
 // Story draft calls to the Dream Builder API (backend BE-08). Child session only, except
 // reading, which a parent can do too.
+import type * as Api from "@dream-builder/api-types";
 import { api } from "./api";
 import { actStart, ROUTES } from "./routes";
 import { EMPTY_STORY, type Mode, type StoryState } from "@/state/AppState";
 
-/** One row of the story library (no story text). */
-export interface StorySummary {
-  id: string;
-  childId: string;
-  title: string | null;
-  status: "draft" | "generating" | "child_review" | "parent_review" | "approved";
-  mode: Mode;
-  storyPath: "two_act" | "three_act" | null;
-  createdAt: string;
-  updatedAt: string;
-}
+/** One row of the story library, no story text (from the API contract, openapi.yaml). */
+export type StorySummary = Api.StorySummary;
 
 /** A full story from the server: every StoryState field, plus the server's own. */
 type ServerStory = Partial<StoryState> & { id: string; childId: string; status: StorySummary["status"] };

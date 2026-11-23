@@ -1,17 +1,13 @@
 // Child profile calls to the Dream Builder API (backend BE-04). Parent only.
 import { api } from "./api";
 
-export type Mode = "junior" | "senior";
+import type * as Api from "@dream-builder/api-types";
 
-/** A child profile as the server describes it. */
-export interface ServerChild {
-  id: string;
-  name: string;
-  age: number;
-  language: string;
-  /** Explorer (junior) or Creator (senior): the parent's choice, stored on the server. */
-  mode: Mode;
-}
+/** Explorer (junior) or Creator (senior). */
+export type Mode = Api.Mode;
+
+/** A child profile as the server describes it (from the API contract, openapi.yaml). */
+export type ServerChild = Api.Child;
 
 export async function listChildren(): Promise<ServerChild[]> {
   return (await api<{ children: ServerChild[] }>("/children")).children;
@@ -24,20 +20,9 @@ export async function addChild(input: { name: string; age: number; language: str
 // ---- Deleting a child's data (backend BE-16) ----------------------------------------------
 
 /** What deleting this child removes, what is kept, and whether a printed book is still on its way. */
-export interface DeletionPreview {
-  child: { id: string; name: string };
-  willDelete: { stories: number; comments: number; files: number; aiRecords: number };
-  kept: string[];
-  waitsForPrint: boolean;
-}
+export type DeletionPreview = Api.DeletionPreview;
 
-export interface DeletionRequest {
-  id: string;
-  childId: string;
-  status: "queued" | "waiting_for_print" | "running" | "done" | "failed";
-  requestedAt: string;
-  finishedAt: string | null;
-}
+export type DeletionRequest = Api.DeletionRequest;
 
 export async function getDeletionPreview(id: string): Promise<DeletionPreview> {
   return api<DeletionPreview>(`/children/${encodeURIComponent(id)}/deletion-preview`);

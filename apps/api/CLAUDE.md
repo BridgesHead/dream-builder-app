@@ -2,9 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-# Dream Builder API (server/)
+# Dream Builder API (apps/api)
 
-> Note: on disk this package is the `backend/` directory. Everywhere below, "server/" means `backend/`.
+> This package is `apps/api/` in the Dream Builder monorepo (it used to be `backend/`). The frontend is
+> `apps/web/`, shared code is in `packages/`. Everywhere below, "server/" means `apps/api/`.
 
 Backend for Dream Builder, a storytelling app for children aged 8–14.
 I am a beginner at backend. After writing code, briefly explain what each new file does and why.
@@ -25,7 +26,7 @@ Refer to the project lead as "Sami Bhai".
 - Structured JSON logs; one shared error shape
 - Background jobs: a real queue with workers running apart from the API (library to confirm with Sami Bhai; BullMQ + Redis is the likely choice)
 - CI on every PR: lint, unit tests, integration tests against a test database, secret scanner
-- pnpm with --ignore-workspace for every install
+- pnpm workspace (monorepo): one install and one lock file at the repo root; Turborepo runs the tasks
 
 > The code from before the guide (PGlite + Drizzle, scrypt, "sid" DB sessions, `final` status) is being
 > replaced story by story. Don't build new features on it.
@@ -33,17 +34,19 @@ Refer to the project lead as "Sami Bhai".
 ## Commands
 
 ```bash
-pnpm install --ignore-workspace --lockfile-dir .
-pnpm add <pkg> --ignore-workspace --lockfile-dir .
-pnpm --ignore-workspace dev         # tsx watch src/index.ts
-pnpm --ignore-workspace typecheck   # tsc --noEmit
+pnpm install         # from the repo root: installs every app and package
+pnpm add <pkg>       # from apps/api/: adds a package to this app
+pnpm dev             # from apps/api/: tsx watch src/index.ts (from the root: API + frontend together)
+pnpm typecheck       # tsc --noEmit
+pnpm test            # vitest (needs MongoDB running)
 ```
 
-pnpm 12 gotchas:
-- `backend/` now has its own `pnpm-workspace.yaml`, so pnpm treats it as its own project and the parent folder (frontend) is not mixed in. Plain `pnpm install` / `pnpm dev` work, and so does the `--ignore-workspace` style above. CI uses plain `pnpm install --frozen-lockfile`.
-- `--ignore-workspace` also ignores backend/pnpm-workspace.yaml, so its `allowBuilds` list is NOT read in that mode. In strict CI mode that made the install fail with `ERR_PNPM_IGNORED_BUILDS`.
-- Build scripts are blocked unless listed under `allowBuilds` in `backend/pnpm-workspace.yaml` (esbuild and argon2 are). Approve a new one with `pnpm approve-builds <pkg>`.
-- If a stray nested `backend/backend/node_modules` ever shows up, delete it.
+pnpm 12 and monorepo gotchas:
+- The only `pnpm-workspace.yaml` and `pnpm-lock.yaml` are at the repo root. Don't create them inside apps/api again.
+- Build scripts are blocked unless listed under `allowBuilds` in the root `pnpm-workspace.yaml` (esbuild and argon2 are). Approve a new one with `pnpm approve-builds <pkg>`.
+- CI runs `pnpm install --frozen-lockfile` from the root, then `pnpm lint`, `typecheck`, `test` and `build` through Turborepo.
+- Shared settings: tsconfig extends `@dream-builder/config/tsconfig.base.json`; eslint uses `@dream-builder/config/eslint`.
+- The API contract is `packages/api-contracts/openapi.yaml`. When you add or change a route, update it too: a test fails if a route is missing from it. Then run `pnpm contracts` from the root to refresh the generated types.
 - TypeScript is pinned to 6.0: typescript-eslint does not support TS 7 yet.
 
 ## Folder layout
@@ -73,10 +76,12 @@ docs/                 the guide, data model note, setup notes
 - Do not touch files outside server/ unless I ask.
 - Do not run git commands unless I ask.
 
-## Frontend contract (../src/state/AppState.tsx)
+## Frontend contract (../web/src/state/AppState.tsx)
 - Read the frontend's `StoryState`, `ChildProfile`, `ParentState` and `Order` for field names; don't guess. Stories also hold the fields the guide adds (e.g. `storyPath` two_act/three_act, `oneMoreAmazingThing`, `thirdChallengeText`).
 - Mode defaults from the child's age: under 12 is Explorer (`junior`), 12 and over is Creator (`senior`). The parent's choice is what gets stored.
 - `heroPronoun` accepts only `he` or `she`.
-- The hero name falls back in this order: `charName`, then the hero type's `defaultName` (in `../src/data/content.ts`), then `"Sparky"`.
+- The hero name falls back in this order: `charName`, then the hero type's `defaultName` (in `../web/src/data/content.ts`), then `"Sparky"`.
 - `facesChallenge3`: `null` means not decided yet, and `false` means the child skipped the Challenge Gate.
 - Panels: 12 for two_act, 15 for three_act. Images are AI-generated and stored in our bucket, never fal.ai links.
+
+

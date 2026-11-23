@@ -2,57 +2,58 @@
 
 Dream Builder is an interactive, child-centred story creation experience. It guides a child and their parent through choosing a story format and visual style, creating a hero, exploring challenges and feelings, and producing a personalised storybook.
 
-## What is included
+## Repo layout (monorepo)
 
-- Parent sign-up, sign-in, child profiles, handover, and review screens
-- Guided story setup: author, format, art style, hero, strengths, tools, and dream
-- Two story modes with a structured act, challenge-gate, rest, reveal, and book flow
-- Checkout and completion screens
-- A screen index at `/screens` for reviewing every interface directly
-- Custom illustration assets for heroes, obstacles, tools, feelings, and book pages
+All apps and shared code live in this one repo. pnpm installs everything from the root, and
+[Turborepo](https://turborepo.dev) runs each task for every app in the right order.
 
-## Technology
+```text
+apps/
+  web/              Frontend: React 18 + Vite + Tailwind (the parent and child screens)
+  api/              Backend: Express 5 + MongoDB. Two programs from one codebase:
+                    the API (pnpm start) and the job worker (pnpm worker)
+packages/
+  api-contracts/    openapi.yaml: every API route, its inputs and answers (the source of truth)
+  api-types/        TypeScript types generated from openapi.yaml, used by web
+  config/           Shared TypeScript and ESLint settings
+infra/              AWS setup (AWS-01 to AWS-04), owned by Sami Bhai
+turbo.json          Which task depends on which (for example: typecheck needs api-types built first)
+pnpm-workspace.yaml Lists the apps and packages that make up the repo
+```
 
-- React 18 and TypeScript
-- Vite
-- Wouter for client-side routing
-- Tailwind CSS
-- Lucide React icons
+This is a monorepo, not microservices: the backend is still one API plus one worker, as the
+backend guide plans. The code inside `apps/api` is split by area (auth, stories, orders, ...), so a
+part can move into its own service later if it ever needs to scale on its own.
 
 ## Run locally
 
-Prerequisites: Node.js 18 or later and npm.
+You need Node.js 24 (see `.nvmrc`), pnpm 12 and MongoDB (see `apps/api/README.md`).
 
 ```bash
-npm install
-npm run dev
+pnpm install                   # once, from the repo root: installs every app and package
+cp apps/api/.env.example apps/api/.env   # then edit it
+pnpm dev                       # starts the API (port 3000) and the frontend (port 5173) together
 ```
 
-Open the local URL printed by Vite (normally `http://localhost:5173`).
+Open <http://localhost:5173>. Vite forwards `/api/...` requests to the API, so no CORS is needed.
 
-## Useful commands
+## Useful commands (from the root)
 
 ```bash
-npm run typecheck
-npm run build
-npm run preview
+pnpm typecheck                 # TypeScript, every app
+pnpm lint                      # ESLint
+pnpm test                      # all tests (the API's need MongoDB running)
+pnpm build                     # builds the shared packages and the frontend
+pnpm contracts                 # re-generates api-types after editing openapi.yaml
+pnpm --filter @dream-builder/api seed    # run one app's own script
 ```
 
-## Project structure
+## More docs
 
-```text
-src/
-  assets/       Illustrations and visual assets
-  components/   Shared UI and storybook components
-  data/         Story content and asset definitions
-  lib/          Routes, flow rules, and text helpers
-  screens/      Parent, story, checkout, and preview screens
-  state/        Application state
-```
-
-## Previewing screens
-
-Visit `/screens` in the running app to enter preview mode. This makes it possible to open individual screens without completing the guided flow first.
+- `apps/api/README.md`: backend setup, every environment variable, known gaps
+- `apps/api/docs/backend-guide.txt`: the user stories (BE-01 to BE-27, AWS-01 to AWS-04)
+- `TESTING.md`: walking through the app with the test account
+- Visit `/screens` in the running frontend to open any screen directly
 
 ## Asset attribution
 

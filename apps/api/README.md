@@ -20,10 +20,9 @@ You need:
 On Windows, install MongoDB with "Install MongoD as a Service" ticked, so it starts with the PC.
 Any other way of running MongoDB works too (for example a Docker container: `docker run -d -p 27017:27017 mongo:8`).
 
-Then, from this `backend/` folder:
+Install once from the **repo root** (`pnpm install`), then from this `apps/api/` folder:
 
 ```bash
-pnpm install
 cp .env.example .env          # then edit .env if you need different values
 pnpm seed                     # optional: fill the local database with the Sprint 1 test data
 pnpm dev                      # starts the API and restarts it when you save a file
@@ -40,10 +39,11 @@ Check it works: open <http://localhost:3000/api/v1/health>. You should see:
 
 ### pnpm notes
 
-`backend/` has its own `pnpm-workspace.yaml`, so pnpm treats this folder as its own project and never
-mixes in the frontend's packages from the parent folder. Run every command from inside `backend/`.
+This app is part of the monorepo: one `pnpm-workspace.yaml` and one `pnpm-lock.yaml` at the repo root.
+Install from the root. Scripts run from this folder (`pnpm dev`, `pnpm test`), or from the root with
+`pnpm --filter @dream-builder/api <script>`. Add a package with `pnpm add <pkg>` from this folder.
 
-That file also lists the packages allowed to run install scripts (`allowBuilds`: esbuild, argon2).
+The root `pnpm-workspace.yaml` also lists the packages allowed to run install scripts (`allowBuilds`: esbuild, argon2).
 If a new package needs one, the install stops with `ERR_PNPM_IGNORED_BUILDS`; add it with
 `pnpm approve-builds <package>`.
 

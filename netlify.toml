@@ -1,0 +1,7 @@
+# Netlify builds only the frontend (apps/web). Settings here win over the Netlify dashboard.
+[build]
+  command = "pnpm --filter @dream-builder/web build"
+  publish = "apps/web/dist"
+
+[build.environment]
+  NODE_VERSION = "24"

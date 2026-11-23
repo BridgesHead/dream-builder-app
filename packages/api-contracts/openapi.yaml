@@ -1,0 +1,1485 @@
+openapi: 3.1.0
+info:
+  title: Dream Builder API
+  version: 1.0.0
+  description: |
+    The contract between the Dream Builder frontend (apps/web) and the API (apps/api).
+    This file is the source of truth: packages/api-types is generated from it, and a test in
+    apps/api fails if a route exists in the app but not here (or the other way round).
+
+    Who may call a route is in its `x-roles`:
+      public           anyone, no login
+      parent           a logged-in parent (email may still be unverified)
+      verified_parent  a parent with a verified email and recorded consent
+      child_session    a child, after the parent handed the device over
+      facilitator      a facilitator linked to the child
+      admin            the Dream Builder team
+
+    Something that is not yours answers 404, never 403, so it can't be found out. A role that
+    may see a thing but not change it answers 403.
+
+    Every error has one shape: `{ "error": { "code", "message", "fields"? } }` (see Error).
+servers:
+  - url: /api/v1
+
+tags:
+  - name: health
+  - name: auth
+  - name: children
+  - name: stories
+  - name: review
+    description: Draft review (BE-12)
+  - name: orders
+  - name: payments
+  - name: deletion
+  - name: facilitator
+  - name: admin
+  - name: media
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ---------------------------------------------------------------- health
+  /health:
+    get:
+      tags: [health]
+      summary: Is the API up, and can it reach the database?
+      operationId: getHealth
+      security: []
+      x-roles: [public]
+      responses:
+        "200":
+          description: All good
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+        "503":
+          description: The API is up but the database is not connected
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+
+  # ---------------------------------------------------------------- auth (BE-03)
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Create a parent account (logs the parent in straight away)
+      operationId: register
+      security: []
+      x-roles: [public]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, email, password, adultConfirmed, consent]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+                email: { type: string, format: email, maxLength: 254 }
+                password: { type: string, maxLength: 1000, description: "8+ characters with a letter and a number (WEAK_PASSWORD otherwise)" }
+                adultConfirmed: { type: boolean }
+                consent: { type: boolean }
+      responses:
+        "201": { $ref: "#/components/responses/ParentSession" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Log in as a parent, facilitator or admin
+      operationId: login
+      security: []
+      x-roles: [public]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email, maxLength: 254 }
+                password: { type: string, minLength: 1, maxLength: 1000 }
+                remember: { type: boolean, default: false }
+      responses:
+        "200": { $ref: "#/components/responses/ParentSession" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      summary: Get a new access token with the refresh cookie
+      description: Answers a parent session or, after a handover, a child session.
+      operationId: refresh
+      security:
+        - refreshCookie: []
+      x-roles: [public]
+      responses:
+        "200":
+          description: A new access token
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ParentSession"
+                  - $ref: "#/components/schemas/ChildSession"
+                discriminator: { propertyName: kind }
+        "401": { $ref: "#/components/responses/Error" }
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Log out (always safe to call)
+      operationId: logout
+      security: []
+      x-roles: [public]
+      responses:
+        "204": { description: Logged out }
+
+  /auth/verify-email:
+    post:
+      tags: [auth]
+      summary: Confirm the email address with the token from the email link
+      operationId: verifyEmail
+      security: []
+      x-roles: [public]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LinkToken" }
+      responses:
+        "204": { description: Email verified }
+        "400": { $ref: "#/components/responses/Error" }
+
+  /auth/resend-verification:
+    post:
+      tags: [auth]
+      summary: Send the verification email again
+      operationId: resendVerification
+      x-roles: [parent]
+      responses:
+        "204": { description: Sent }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+
+  /auth/forgot-password:
+    post:
+      tags: [auth]
+      summary: Email a password-reset link (same answer whether or not the email exists)
+      operationId: forgotPassword
+      security: []
+      x-roles: [public]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email, maxLength: 254 }
+      responses:
+        "204": { description: Sent if the account exists }
+        "400": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+
+  /auth/reset-password:
+    post:
+      tags: [auth]
+      summary: Set a new password with the token from the reset email
+      operationId: resetPassword
+      security: []
+      x-roles: [public]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token: { type: string, minLength: 1, maxLength: 200 }
+                password: { type: string, maxLength: 1000 }
+      responses:
+        "204": { description: Password changed }
+        "400": { $ref: "#/components/responses/Error" }
+
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: Who is logged in (grown-ups only)
+      operationId: getMe
+      x-roles: [parent, facilitator, admin]
+      responses:
+        "200":
+          description: The logged-in user
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user]
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- child sessions (BE-04)
+  /auth/child-session:
+    post:
+      tags: [auth]
+      summary: Hand the device to a child (the parent session on this device ends)
+      operationId: startChildSession
+      x-roles: [verified_parent]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [childId]
+              properties:
+                childId: { type: string, minLength: 1, maxLength: 100 }
+      responses:
+        "201":
+          description: The child session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChildSession" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /auth/child-session/exit:
+    post:
+      tags: [auth]
+      summary: Leave the child session with the parent's password
+      operationId: exitChildSession
+      x-roles: [child_session]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [password]
+              properties:
+                password: { type: string, minLength: 1, maxLength: 1000 }
+      responses:
+        "200": { $ref: "#/components/responses/ParentSession" }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- children (BE-04, BE-16)
+  /children:
+    get:
+      tags: [children]
+      summary: My children (removed ones are hidden)
+      operationId: listChildren
+      x-roles: [verified_parent]
+      responses:
+        "200":
+          description: The children
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [children]
+                properties:
+                  children:
+                    type: array
+                    items: { $ref: "#/components/schemas/Child" }
+        "403": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [children]
+      summary: Add a child profile
+      operationId: createChild
+      x-roles: [verified_parent]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NewChild" }
+      responses:
+        "201": { $ref: "#/components/responses/OneChild" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+
+  /children/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      tags: [children]
+      summary: One child
+      operationId: getChild
+      x-roles: [verified_parent]
+      responses:
+        "200": { $ref: "#/components/responses/OneChild" }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [children]
+      summary: Change a child profile (send at least one field)
+      operationId: updateChild
+      x-roles: [verified_parent]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                name: { type: string, minLength: 1, maxLength: 50 }
+                age: { type: integer, minimum: 8, maximum: 14 }
+                language: { type: string, minLength: 1, maxLength: 50 }
+                mode: { $ref: "#/components/schemas/Mode" }
+      responses:
+        "200": { $ref: "#/components/responses/OneChild" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /children/{id}/deletion-preview:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      tags: [deletion]
+      summary: What deleting this child's data removes, and what is kept (BE-16)
+      operationId: getDeletionPreview
+      x-roles: [verified_parent]
+      responses:
+        "200":
+          description: The preview
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeletionPreview" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /children/{id}/deletion:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      tags: [deletion]
+      summary: Delete this child's data (needs the parent's password)
+      description: The child is hidden at once; everything is deleted in the background.
+      operationId: requestDeletion
+      x-roles: [verified_parent]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [password]
+              properties:
+                password: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        "202":
+          description: Deletion started
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [request, waitsForPrint]
+                properties:
+                  request: { $ref: "#/components/schemas/DeletionRequest" }
+                  waitsForPrint: { type: boolean }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+
+  /deletion-requests/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      tags: [deletion]
+      summary: How a deletion request is going
+      operationId: getDeletionRequest
+      x-roles: [verified_parent]
+      responses:
+        "200":
+          description: The request
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [request]
+                properties:
+                  request: { $ref: "#/components/schemas/DeletionRequest" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- stories (BE-07, BE-08, BE-10)
+  /stories:
+    get:
+      tags: [stories]
+      summary: Story summaries, newest first
+      description: A child sees their own; a parent sees their children's (filter with childId).
+      operationId: listStories
+      x-roles: [child_session, verified_parent]
+      parameters:
+        - name: childId
+          in: query
+          required: false
+          schema: { type: string, maxLength: 100 }
+      responses:
+        "200":
+          description: The stories
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [stories]
+                properties:
+                  stories:
+                    type: array
+                    items: { $ref: "#/components/schemas/StorySummary" }
+        "400": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [stories]
+      summary: Start a new draft for the child in this session
+      operationId: createStory
+      x-roles: [child_session]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                authorName: { type: string, maxLength: 100 }
+      responses:
+        "201": { $ref: "#/components/responses/OneStory" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+
+  /stories/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      tags: [stories]
+      summary: Every field of one story
+      operationId: getStory
+      x-roles: [child_session, verified_parent]
+      responses:
+        "200": { $ref: "#/components/responses/OneStory" }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [stories]
+      summary: Save one wizard step (only the fields that changed)
+      operationId: saveStoryStep
+      x-roles: [child_session]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StoryPatch" }
+      responses:
+        "200": { $ref: "#/components/responses/OneStory" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /stories/{id}/generate:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      tags: [stories]
+      summary: Make the story (background jobs); refused with the missing steps if incomplete
+      operationId: generateStory
+      x-roles: [child_session]
+      responses:
+        "202": { $ref: "#/components/responses/Status" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /stories/{id}/generate/retry:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      tags: [stories]
+      summary: Put the jobs that failed every try back on the queue ("Try again")
+      operationId: retryGeneration
+      x-roles: [child_session]
+      responses:
+        "202": { $ref: "#/components/responses/Status" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /stories/{id}/status:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      tags: [stories]
+      summary: Generation progress for Final Climb (asked every 2 seconds)
+      operationId: getStoryStatus
+      x-roles: [child_session, verified_parent]
+      responses:
+        "200": { $ref: "#/components/responses/Status" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /stories/{id}/panels/{number}/image:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+      - $ref: "#/components/parameters/PanelNumber"
+    get:
+      tags: [stories]
+      summary: A short-lived link to one panel's picture (404 if it has none yet)
+      operationId: getPanelImage
+      x-roles: [child_session, verified_parent]
+      responses:
+        "200":
+          description: The link
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, expiresAt]
+                properties:
+                  url: { type: string }
+                  expiresAt: { type: string, format: date-time }
+        "404": { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- draft review (BE-12)
+  /stories/{id}/panels/{number}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+      - $ref: "#/components/parameters/PanelNumber"
+    patch:
+      tags: [review]
+      summary: New words for one page
+      operationId: editPanel
+      x-roles: [child_session]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [text]
+              properties:
+                text: { type: string, minLength: 1, maxLength: 4000 }
+      responses:
+        "200":
+          description: The changed page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [panel]
+                properties:
+                  panel:
+                    type: object
+                    required: [number, text, previousTexts]
+                    properties:
+                      number: { type: integer }
+                      text: { type: string }
+                      previousTexts: { type: array, items: { type: string } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /stories/{id}/comic-cells/{page}/{cell}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+      - name: page
+        in: path
+        required: true
+        schema: { type: string }
+      - name: cell
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      tags: [review]
+      summary: New caption or dialogue for one comic cell
+      operationId: editComicCell
+      x-roles: [child_session]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                caption: { type: string, maxLength: 1000 }
+                dialogue: { type: [string, "null"], maxLength: 500 }
+      responses:
+        "200":
+          description: The changed cell
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cell]
+                properties:
+                  cell:
+                    type: object
+                    required: [page, cell, caption, dialogue, previousVersions]
+                    properties:
+                      page: { type: integer }
+                      cell: { type: integer }
+                      caption: { type: string }
+                      dialogue: { type: [string, "null"] }
+                      previousVersions: { type: array, items: { type: object } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /stories/{id}/panels/{number}/redraw:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+      - $ref: "#/components/parameters/PanelNumber"
+    post:
+      tags: [review]
+      summary: A new picture for one page (background job; GET status shows it)
+      operationId: redrawPanel
+      x-roles: [child_session]
+      responses:
+        "202":
+          description: Redraw queued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [redraw]
+                properties:
+                  redraw:
+                    type: object
+                    required: [panelNumber, status, redrawsLeft]
+                    properties:
+                      panelNumber: { type: integer }
+                      status: { type: string, const: queued }
+                      redrawsLeft: { type: integer }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /stories/{id}/panels/{number}/rewrite:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+      - $ref: "#/components/parameters/PanelNumber"
+    post:
+      tags: [review]
+      summary: One other way to say a sentence (Creator mode only)
+      operationId: rewriteSentence
+      x-roles: [child_session]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [sentence]
+              properties:
+                sentence: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        "200":
+          description: The suggestion
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [panelNumber, original, suggestion, maxWords]
+                properties:
+                  panelNumber: { type: integer }
+                  original: { type: string }
+                  suggestion: { type: string }
+                  maxWords: { type: integer }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+
+  /stories/{id}/submit:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      tags: [review]
+      summary: '"I''m done!": the story goes to the parent for review'
+      operationId: submitStory
+      x-roles: [child_session]
+      responses:
+        "200":
+          description: Now in parent review
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: parent_review }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /stories/{id}/comments:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      tags: [review]
+      summary: The parent's notes, oldest first
+      operationId: listComments
+      x-roles: [child_session, verified_parent]
+      responses:
+        "200":
+          description: The notes
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [comments]
+                properties:
+                  comments:
+                    type: array
+                    items: { $ref: "#/components/schemas/Comment" }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [review]
+      summary: Add notes; a change request sends the story back to the child
+      operationId: addComments
+      x-roles: [verified_parent]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [comments]
+              properties:
+                comments:
+                  type: array
+                  minItems: 1
+                  maxItems: 30
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [text]
+                    properties:
+                      panelNumber: { type: [integer, "null"], minimum: 1, maximum: 15, default: null, description: "null = about the whole story" }
+                      text: { type: string, minLength: 1, maxLength: 2000 }
+                      type: { type: string, enum: [comment, change_request], default: comment }
+      responses:
+        "201":
+          description: Saved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, comments]
+                properties:
+                  status: { type: string, enum: [child_review, parent_review] }
+                  comments:
+                    type: array
+                    items: { $ref: "#/components/schemas/Comment" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /stories/{id}/approve:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      tags: [review]
+      summary: The parent approves the story (it is locked after this)
+      operationId: approveStory
+      x-roles: [verified_parent]
+      responses:
+        "200":
+          description: Approved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, approvedAt]
+                properties:
+                  status: { type: string, const: approved }
+                  approvedAt: { type: string, format: date-time }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- orders and payments (BE-17)
+  /orders/prices:
+    get:
+      tags: [orders]
+      summary: The AED prices, from server config only
+      operationId: getPrices
+      x-roles: [verified_parent]
+      responses:
+        "200":
+          description: The prices
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Prices" }
+
+  /orders:
+    get:
+      tags: [orders]
+      summary: My orders, newest first
+      operationId: listOrders
+      x-roles: [verified_parent]
+      parameters:
+        - name: storyId
+          in: query
+          required: false
+          schema: { type: string, maxLength: 100 }
+      responses:
+        "200":
+          description: The orders
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [orders]
+                properties:
+                  orders:
+                    type: array
+                    items: { $ref: "#/components/schemas/Order" }
+        "400": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [orders]
+      summary: Make (or reuse) an order and get Stripe's payment page
+      description: The price is never sent by the browser. A hardback needs a delivery address; a digital book must not have one.
+      operationId: startCheckout
+      x-roles: [verified_parent]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [storyId, tier]
+              properties:
+                storyId: { $ref: "#/components/schemas/ObjectId" }
+                tier: { $ref: "#/components/schemas/OrderTier" }
+                deliveryAddress: { $ref: "#/components/schemas/DeliveryAddress" }
+      responses:
+        "201":
+          description: The order and the Stripe Checkout link
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [order, checkoutUrl]
+                properties:
+                  order: { $ref: "#/components/schemas/Order" }
+                  checkoutUrl: { type: string }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /orders/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      tags: [orders]
+      summary: One order (the success screen asks this until it says "paid")
+      operationId: getOrder
+      x-roles: [verified_parent]
+      responses:
+        "200":
+          description: The order
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [order]
+                properties:
+                  order: { $ref: "#/components/schemas/Order" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /payments/stripe/webhook:
+    post:
+      tags: [payments]
+      summary: Stripe tells us a payment happened (signed; called by Stripe only)
+      operationId: stripeWebhook
+      security: []
+      x-roles: [public]
+      parameters:
+        - name: Stripe-Signature
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: A Stripe event, read as raw bytes so the signature can be checked
+      responses:
+        "200":
+          description: Received
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [received]
+                properties:
+                  received: { type: boolean, const: true }
+        "400": { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- facilitator (BE-05)
+  /facilitator/children:
+    get:
+      tags: [facilitator]
+      summary: The children linked to me
+      operationId: facilitatorChildren
+      x-roles: [facilitator]
+      responses:
+        "200":
+          description: The children
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [children]
+                properties:
+                  children:
+                    type: array
+                    items: { $ref: "#/components/schemas/Child" }
+        "403": { $ref: "#/components/responses/Error" }
+
+  /facilitator/children/{childId}/stories:
+    parameters:
+      - name: childId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [facilitator]
+      summary: A linked child's story history (no story text)
+      operationId: facilitatorStoryHistory
+      x-roles: [facilitator]
+      responses:
+        "200":
+          description: The stories
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [stories]
+                properties:
+                  stories:
+                    type: array
+                    items: { $ref: "#/components/schemas/StorySummary" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /facilitator/stories/{storyId}:
+    parameters:
+      - $ref: "#/components/parameters/StoryId"
+    get:
+      tags: [facilitator]
+      summary: Read one story of a linked child (written to the audit log)
+      operationId: facilitatorViewStory
+      x-roles: [facilitator]
+      responses:
+        "200": { $ref: "#/components/responses/OneStory" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- admin (BE-05, FE-15)
+  /admin/audit-log:
+    get:
+      tags: [admin]
+      summary: Read the audit log (nothing can change or delete an entry)
+      operationId: listAuditLog
+      x-roles: [admin]
+      parameters:
+        - { name: actorId, in: query, schema: { type: string, maxLength: 100 } }
+        - { name: targetType, in: query, schema: { type: string, maxLength: 50 } }
+        - { name: targetId, in: query, schema: { type: string, maxLength: 100 } }
+        - { name: action, in: query, schema: { type: string, maxLength: 100 } }
+        - { name: before, in: query, description: "An entry id: show entries older than it", schema: { type: string, maxLength: 100 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: The entries, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries]
+                properties:
+                  entries:
+                    type: array
+                    items: { $ref: "#/components/schemas/AuditEntry" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+
+  /admin/stories/{storyId}:
+    parameters:
+      - $ref: "#/components/parameters/StoryId"
+    get:
+      tags: [admin]
+      summary: Open any story (written to the audit log)
+      operationId: adminViewStory
+      x-roles: [admin]
+      responses:
+        "200": { $ref: "#/components/responses/OneStory" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /admin/stories/{storyId}/progress:
+    parameters:
+      - $ref: "#/components/parameters/StoryId"
+    get:
+      tags: [admin]
+      summary: Book Progress Detail - per-panel status, every job and the story-rule violations
+      operationId: adminStoryProgress
+      x-roles: [admin]
+      responses:
+        "200":
+          description: The progress
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [progress]
+                properties:
+                  progress: { $ref: "#/components/schemas/AdminProgress" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- media (BE-10, local only)
+  /media/{key}:
+    get:
+      tags: [media]
+      summary: A picture from the local storage folder, by signed link (PC only; 404 on AWS)
+      operationId: getMedia
+      security: []
+      x-roles: [public]
+      parameters:
+        - name: key
+          in: path
+          required: true
+          description: The storage key, e.g. stories/<id>/panel-03.png (may contain slashes)
+          schema: { type: string }
+        - { name: expires, in: query, required: true, schema: { type: string } }
+        - { name: sig, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The picture
+          content:
+            image/png: { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+        "404": { $ref: "#/components/responses/Error" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: The 15-minute access token from login, register, refresh or child-session.
+    refreshCookie:
+      type: apiKey
+      in: cookie
+      name: db_refresh
+      description: httpOnly refresh cookie, sent only to /api/v1/auth/... paths.
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      description: A MongoDB id. A bad or unknown id answers 404.
+      schema: { type: string }
+    StoryId:
+      name: storyId
+      in: path
+      required: true
+      schema: { type: string }
+    PanelNumber:
+      name: number
+      in: path
+      required: true
+      description: The page number, 1 to 12 (two acts) or 1 to 15 (three acts)
+      schema: { type: string }
+
+  responses:
+    Error:
+      description: Something went wrong (see the code)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ParentSession:
+      description: A parent session
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ParentSession" }
+    OneChild:
+      description: One child
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [child]
+            properties:
+              child: { $ref: "#/components/schemas/Child" }
+    OneStory:
+      description: One story, every field
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [story]
+            properties:
+              story: { $ref: "#/components/schemas/Story" }
+    Status:
+      description: Generation progress
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [status]
+            properties:
+              status: { $ref: "#/components/schemas/StoryProgress" }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, description: "Stable, safe to check in code, e.g. NOT_FOUND, VALIDATION_FAILED, STORY_LOCKED" }
+            message: { type: string, description: For people; may change }
+            fields:
+              type: object
+              description: 'Per-field problems, e.g. { "age": ["Too small"] }'
+              additionalProperties: true
+
+    Health:
+      type: object
+      required: [status, version, database]
+      properties:
+        status: { type: string, enum: [ok, error] }
+        version: { type: string }
+        database: { type: string }
+
+    ObjectId:
+      type: string
+      pattern: "^[0-9a-fA-F]{24}$"
+
+    LinkToken:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string, minLength: 1, maxLength: 200 }
+
+    UserRole:
+      type: string
+      enum: [parent, facilitator, admin]
+
+    User:
+      type: object
+      required: [id, name, email, role, emailVerified]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        email: { type: string }
+        role: { $ref: "#/components/schemas/UserRole" }
+        emailVerified: { type: boolean }
+
+    ParentSession:
+      type: object
+      required: [kind, user, accessToken, expiresIn]
+      properties:
+        kind: { type: string, const: parent }
+        user: { $ref: "#/components/schemas/User" }
+        accessToken: { type: string }
+        expiresIn: { type: integer, description: Seconds until the access token runs out }
+
+    ChildSession:
+      type: object
+      required: [kind, child, accessToken, expiresIn]
+      properties:
+        kind: { type: string, const: child }
+        child: { $ref: "#/components/schemas/Child" }
+        accessToken: { type: string }
+        expiresIn: { type: integer }
+
+    Mode:
+      type: string
+      enum: [junior, senior]
+      description: junior = Explorer (under 12), senior = Creator (12 and over)
+
+    Child:
+      type: object
+      required: [id, name, age, language, mode]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        age: { type: integer }
+        language: { type: string }
+        mode: { $ref: "#/components/schemas/Mode" }
+
+    NewChild:
+      type: object
+      additionalProperties: false
+      required: [name, age, language]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 50 }
+        age: { type: integer, minimum: 8, maximum: 14 }
+        language: { type: string, minLength: 1, maxLength: 50 }
+        mode: { $ref: "#/components/schemas/Mode" }
+
+    DeletionPreview:
+      type: object
+      required: [child, willDelete, kept, waitsForPrint]
+      properties:
+        child:
+          type: object
+          required: [id, name]
+          properties:
+            id: { type: string }
+            name: { type: string }
+        willDelete:
+          type: object
+          required: [stories, comments, files, aiRecords]
+          properties:
+            stories: { type: integer }
+            comments: { type: integer }
+            files: { type: integer }
+            aiRecords: { type: integer }
+        kept: { type: array, items: { type: string } }
+        waitsForPrint: { type: boolean }
+
+    DeletionRequest:
+      type: object
+      required: [id, childId, status, requestedAt, finishedAt]
+      properties:
+        id: { type: string }
+        childId: { type: string }
+        status: { type: string, enum: [queued, waiting_for_print, running, done, failed] }
+        requestedAt: { type: string, format: date-time }
+        finishedAt: { type: [string, "null"], format: date-time }
+
+    StoryStatus:
+      type: string
+      enum: [draft, generating, child_review, parent_review, approved]
+
+    StoryPath:
+      type: string
+      enum: [two_act, three_act]
+      description: two_act = 12 panels, three_act = 15 panels
+
+    StorySummary:
+      type: object
+      required: [id, childId, title, status, mode, storyPath, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        childId: { type: string }
+        title: { type: [string, "null"] }
+        status: { $ref: "#/components/schemas/StoryStatus" }
+        mode: { $ref: "#/components/schemas/Mode" }
+        storyPath:
+          oneOf:
+            - $ref: "#/components/schemas/StoryPath"
+            - type: "null"
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    Story:
+      description: |
+        Every field of one story: the wizard answers (as in StoryPatch), plus what the server
+        sets (status, mode, storyPath, panels, comic cells, title, storyGeneratedAt, ...).
+        See apps/api/docs/data-model.md for the full list.
+      type: object
+      additionalProperties: true
+      required: [id, childId, status, mode]
+      properties:
+        id: { type: string }
+        childId: { type: string }
+        status: { $ref: "#/components/schemas/StoryStatus" }
+        mode: { $ref: "#/components/schemas/Mode" }
+        storyPath:
+          oneOf:
+            - $ref: "#/components/schemas/StoryPath"
+            - type: "null"
+        title: { type: [string, "null"] }
+        authorName: { type: string }
+        storyGeneratedAt: { type: [string, "null"], format: date-time }
+        confirmedByChild: { type: boolean }
+
+    StoryPatch:
+      description: |
+        One wizard step: only the fields that changed, at least one. Pick fields take real option
+        ids (see apps/web/src/data/content.ts); whether an option fits THIS story's mode is
+        checked on the server. status, mode, storyPath, childId, confirmedByChild and
+        storyGeneratedAt are set by the server: sending them is a 400.
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        authorName: { type: string, maxLength: 100 }
+        selectedFormat: { type: [string, "null"], enum: [storybook, comic, null] }
+        comicVibe: { type: [string, "null"], enum: [soft-peaceful, clear-bold, indie-graphic-novel, null] }
+        heroType: { type: [string, "null"], enum: [fox, robot, knight, null] }
+        charName: { type: string, maxLength: 100 }
+        heroPronoun: { type: [string, "null"], enum: [he, she, null], description: '"they" is refused (guide BE-08)' }
+        charStrengths: { $ref: "#/components/schemas/Picks3" }
+        selfLove: { type: string, maxLength: 2000 }
+        charTools: { type: array, uniqueItems: true, items: { type: string, enum: [wheelchair, headphones, fidget-toy, white-cane, hearing-aid, glasses] } }
+        aspiration: { type: string, maxLength: 2000 }
+        obstacles: { $ref: "#/components/schemas/Picks4" }
+        heartColor: { type: string, description: 'A feeling id, or "" for not chosen yet' }
+        braveMove: { type: string, description: 'A brave-move id, or "" for not chosen yet' }
+        heroWords: { type: string, maxLength: 500 }
+        safePlaceText: { type: string, maxLength: 2000 }
+        obstacles2: { $ref: "#/components/schemas/Picks4" }
+        heartColor2: { type: string }
+        braveMove2: { type: string }
+        heroWords2: { type: string, maxLength: 500 }
+        facesChallenge3: { type: [boolean, "null"], description: "null = not decided, false = skipped the Challenge Gate" }
+        obstacles3: { $ref: "#/components/schemas/Picks4" }
+        heartColor3: { type: string }
+        braveMove3: { type: string }
+        heroWords3: { type: string, maxLength: 500 }
+        oneMoreAmazingThing: { type: string, maxLength: 500 }
+        thirdChallengeText: { type: string, maxLength: 2000 }
+
+    Picks3:
+      type: array
+      maxItems: 3
+      uniqueItems: true
+      items: { type: string }
+
+    Picks4:
+      type: array
+      maxItems: 4
+      uniqueItems: true
+      items: { type: string }
+
+    WorkStatus:
+      type: string
+      enum: [queued, running, success, fallback, failed]
+
+    StoryProgress:
+      description: Overall progress plus text and picture status per panel (Final Climb, FE-06).
+      type: object
+      additionalProperties: true
+
+    Comment:
+      type: object
+      required: [id, panelNumber, type, text, authorName, createdAt]
+      properties:
+        id: { type: string }
+        panelNumber: { type: [integer, "null"] }
+        type: { type: string, enum: [comment, change_request] }
+        text: { type: string }
+        authorName: { type: [string, "null"] }
+        createdAt: { type: string, format: date-time }
+
+    OrderTier:
+      type: string
+      enum: [digital, hardback]
+
+    Emirate:
+      type: string
+      enum: [Abu Dhabi, Dubai, Sharjah, Ajman, Umm Al Quwain, Ras Al Khaimah, Fujairah]
+
+    DeliveryAddress:
+      type: object
+      additionalProperties: false
+      required: [fullName, phone, line1, city, emirate]
+      properties:
+        fullName: { type: string, minLength: 1, maxLength: 100 }
+        phone: { type: string, pattern: "^\\+?[0-9 ()-]{7,20}$" }
+        line1: { type: string, minLength: 1, maxLength: 200 }
+        line2: { type: string, maxLength: 200 }
+        city: { type: string, minLength: 1, maxLength: 100 }
+        emirate: { $ref: "#/components/schemas/Emirate" }
+        postalCode: { type: string, maxLength: 20 }
+
+    Order:
+      type: object
+      required: [id, orderNumber, storyId, tier, amount, currency, paymentStatus, printStatus, deliveryAddress, paidAt, createdAt]
+      properties:
+        id: { type: string }
+        orderNumber: { type: string }
+        storyId: { type: string }
+        tier: { $ref: "#/components/schemas/OrderTier" }
+        amount: { type: number, description: In AED }
+        currency: { type: string, const: AED }
+        paymentStatus: { type: string, enum: [pending, paid, failed, cancelled] }
+        printStatus: { type: string }
+        deliveryAddress:
+          oneOf:
+            - $ref: "#/components/schemas/DeliveryAddress"
+            - type: "null"
+        paidAt: { type: [string, "null"], format: date-time }
+        createdAt: { type: string, format: date-time }
+
+    Prices:
+      type: object
+      required: [currency, tiers]
+      properties:
+        currency: { type: string, const: AED }
+        tiers:
+          type: array
+          items:
+            type: object
+            required: [tier, name, price, delivery, total]
+            properties:
+              tier: { $ref: "#/components/schemas/OrderTier" }
+              name: { type: string }
+              price: { type: number }
+              delivery: { type: number }
+              total: { type: number }
+
+    AuditEntry:
+      type: object
+      additionalProperties: true
+      properties:
+        id: { type: string }
+        actorId: { type: [string, "null"] }
+        actorRole: { type: string }
+        action: { type: string }
+        targetType: { type: string }
+        targetId: { type: [string, "null"] }
+        createdAt: { type: string, format: date-time }
+
+    AdminProgress:
+      description: Book Progress Detail (FE-15). jobs = every generation job; violations = the story-rule problems found.
+      type: object
+      additionalProperties: true
+      properties:
+        jobs:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              type: { type: string }
+              status: { $ref: "#/components/schemas/WorkStatus" }
+              panelNumber: { type: [integer, "null"] }
+              provider: { type: [string, "null"] }
+              aiModel: { type: [string, "null"] }
+              promptVersion: { type: [string, "null"] }
+              fallbackUsed: { type: [boolean, "null"] }
+              durationMs: { type: [number, "null"] }
+              attempts: { type: integer }
+              error: { type: [string, "null"] }
+              createdAt: { type: string, format: date-time }
+              updatedAt: { type: string, format: date-time }
+        violations:
+          type: array
+          items: { type: object, additionalProperties: true }

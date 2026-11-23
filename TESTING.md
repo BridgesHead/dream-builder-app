@@ -7,13 +7,13 @@ until their backend stories (BE-04, BE-08, BE-17) are built.
 
 ## Start both servers
 
-1. MongoDB running (see `backend/README.md`)
-2. Backend: in `backend/`, run `pnpm dev` (port 3000)
-3. Frontend: in this folder, run `npm run dev` (port 5173; it forwards `/api` to the backend)
+1. MongoDB running (see `apps/api/README.md`)
+2. From the repo root, run `pnpm dev`: it starts the API (port 3000) and the frontend
+   (port 5173; the frontend forwards `/api` to the API)
 
 ## Test account
 
-`cd backend && pnpm seed` creates this parent (verified, with consent recorded).
+`pnpm --filter @dream-builder/api seed` creates this parent (verified, with consent recorded).
 It empties the local database first.
 
 | Field     | Value              |
