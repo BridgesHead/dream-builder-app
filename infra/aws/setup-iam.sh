@@ -18,7 +18,7 @@
 # Safe to re-run.
 set -euo pipefail
 
-GITHUB_REPO="${GITHUB_REPO:-iamKhan79690/dream-builder-app}"   # set GITHUB_REPO= to skip step 4
+GITHUB_REPO="${GITHUB_REPO:-BridgesHead/dream-builder-app}"   # set GITHUB_REPO= to skip step 4
 REGION="${REGION:-ap-south-1}"
 ECR_REPO_NAME="${ECR_REPO_NAME:-dreambuilder-backend}"
 STAGING_INSTANCE="${STAGING_INSTANCE:-i-0bd3b0c3c9230134a}"
