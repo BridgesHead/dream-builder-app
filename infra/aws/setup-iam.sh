@@ -8,8 +8,9 @@
 #   1. dreambuilder-ec2-role (+ instance profile) attached to both servers:
 #      lets them pull images from ECR and receive deploy commands via SSM.
 #   2. The GitHub Actions OIDC identity provider (if the account doesn't have it yet).
-#   3. Three private buckets per environment: pictures (S3_BUCKET, BE-10), voice recordings
-#      (S3_VOICE_BUCKET, BE-15) and print files (S3_PRINT_BUCKET, BE-18). Each server can
+#   3. Four private buckets per environment: pictures (S3_BUCKET, BE-10), voice recordings
+#      (S3_VOICE_BUCKET, BE-15), print files (S3_PRINT_BUCKET, BE-18) and nightly database
+#      backups (S3_BACKUP_BUCKET, kept BACKUP_DAYS=14 days). Each server can
 #      use ONLY its own environment's buckets, and read ONLY its own settings in
 #      Parameter Store (/dreambuilder/<env>/).
 #   4. dreambuilder-deploy-staging and dreambuilder-deploy-prod roles for GitHub Actions:
@@ -111,9 +112,20 @@ voice_cors() {
     \"MaxAgeSeconds\":3000}]}"
 }
 
+# Nightly database backups (infra/server/backup.sh). Copies older than BACKUP_DAYS are
+# deleted by S3 itself; the servers can add backups and read them, never delete them.
+# The app's deletion email quotes BACKUP_RETENTION_DAYS (setup-env.sh); change both together.
+BACKUP_DAYS="${BACKUP_DAYS:-14}"
+backup_lifecycle() {
+  aws s3api put-bucket-lifecycle-configuration --bucket "$1" --lifecycle-configuration "{\"Rules\":[
+    {\"ID\":\"expire-old-backups\",\"Status\":\"Enabled\",\"Filter\":{\"Prefix\":\"\"},
+     \"Expiration\":{\"Days\":$BACKUP_DAYS},\"AbortIncompleteMultipartUpload\":{\"DaysAfterInitiation\":1}}]}"
+}
+
 for env in staging prod; do
-  for kind in pictures voice print; do make_bucket "$(bucket_name "$kind" "$env")"; done
+  for kind in pictures voice print backups; do make_bucket "$(bucket_name "$kind" "$env")"; done
   voice_cors "$(bucket_name voice "$env")"
+  backup_lifecycle "$(bucket_name backups "$env")"
 done
 
 # Both servers share dreambuilder-ec2-role, so every statement also checks WHICH server is
@@ -150,6 +162,20 @@ $(bucket_statement StagingPrint "$(bucket_name print staging)" "$STAGING_INSTANC
 $(bucket_statement ProdVoice "$(bucket_name voice prod)" "$PROD_INSTANCE"),
 $(bucket_statement ProdPrint "$(bucket_name print prod)" "$PROD_INSTANCE")]}"
 
+# Backups: add and read, but no delete, so a broken or misused server can't wipe its own
+# backups. Old copies expire through the bucket's lifecycle rule.
+backup_statement() {   # sid, bucket, instance
+  cat <<EOF
+ {"Sid":"$1Objects","Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],
+  "Resource":"arn:aws:s3:::$2/*",$(instance_condition "$3")},
+ {"Sid":"$1List","Effect":"Allow","Action":"s3:ListBucket","Resource":"arn:aws:s3:::$2",
+  $(instance_condition "$3")}
+EOF
+}
+aws iam put-role-policy --role-name "$EC2_ROLE" --policy-name backups --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[
+$(backup_statement StagingBackups "$(bucket_name backups staging)" "$STAGING_INSTANCE"),
+$(backup_statement ProdBackups "$(bucket_name backups prod)" "$PROD_INSTANCE")]}"
+
 # The AWS-managed AmazonSSMManagedInstanceCore policy (needed for SSM) also allows
 # ssm:GetParameter on EVERY parameter, so the allows above are not enough on their own:
 # the explicit denies make sure a server can't read the other environment's settings one by
@@ -174,8 +200,8 @@ $(settings_deny Prod prod "$PROD_INSTANCE"),
   \"Resource\":[\"arn:aws:ssm:$REGION:$ACCOUNT:parameter/dreambuilder-internal\",
               \"arn:aws:ssm:$REGION:$ACCOUNT:parameter/dreambuilder-internal/*\"]}]}"
 
-echo "    staging server -> dreambuilder-{pictures,voice,print}-staging-$ACCOUNT + /dreambuilder/staging/"
-echo "    prod server    -> dreambuilder-{pictures,voice,print}-prod-$ACCOUNT + /dreambuilder/prod/"
+echo "    staging server -> dreambuilder-{pictures,voice,print,backups}-staging-$ACCOUNT + /dreambuilder/staging/"
+echo "    prod server    -> dreambuilder-{pictures,voice,print,backups}-prod-$ACCOUNT + /dreambuilder/prod/"
 
 # ---------------------------------------------------------------------------
 echo "==> 4. Deploy roles for GitHub Actions"
