@@ -18,7 +18,8 @@
 # Safe to re-run.
 set -euo pipefail
 
-GITHUB_REPO="${GITHUB_REPO:-BridgesHead/dream-builder-app}"   # set GITHUB_REPO= to skip step 4
+# GitHub signs in as owner@ownerID/repo@repoID (IDs survive renames and transfers): see the 'sub' in CloudTrail
+GITHUB_REPO="${GITHUB_REPO:-BridgesHead@360629568/dream-builder-app@1442847901}"   # set GITHUB_REPO= to skip step 4
 REGION="${REGION:-ap-south-1}"
 ECR_REPO_NAME="${ECR_REPO_NAME:-dreambuilder-backend}"
 STAGING_INSTANCE="${STAGING_INSTANCE:-i-0bd3b0c3c9230134a}"
