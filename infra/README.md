@@ -8,8 +8,8 @@ Parameter Store (SecureString, encrypted with KMS) and are only read by the serv
 
 | Story | What it covers | Status |
 | --- | --- | --- |
-| AWS-01 | Hosting for the API and worker, MongoDB Atlas, picture bucket, Redis (ElastiCache), secrets, CI deploy, email | Staging live and tested end to end (2026-11-24). The pipeline waits for the GitHub environments; the dev server is skipped; email not started |
-| AWS-02 | Staging and production copies, voice and print buckets, listening-page domain, backups, alerts | Copies and buckets done; domain, backups and alerts wait on decisions (below) |
+| AWS-01 | Hosting for the API and worker, MongoDB Atlas, picture bucket, Redis (ElastiCache), secrets, CI deploy, email | Staging live and tested end to end; the pipeline deploys it on every merge to `main` (2026-11-24). The dev server is skipped; email not started |
+| AWS-02 | Staging and production copies, voice and print buckets, listening-page domain, backups, alerts | Copies and buckets done. Nightly backups with a tested restore done; point-in-time restore waits for the paid Atlas tier. Domain and alerts wait on decisions (below) |
 | AWS-03 | Autoscaling, WAF, IAM review, encryption checks, budgets and dashboards | Not started |
 | AWS-04 | Production go-live and handover of access | Not started |
 
@@ -32,10 +32,12 @@ well, so the app and its database stay in the same region.
 | --- | --- | --- |
 | dev | **Not created** (Sami Bhai, 2026-11-24: "skip it at the moment"). Staging plays its part: every merge to `main` lands there. | — |
 | staging | Live | Every merge to `main`, automatically |
-| production | Servers, buckets, Redis and settings ready; database waits for the backup decision (see AWS-02) | A release tag `v1.2.3`, after Sami Bhai approves in GitHub |
+| production | Server, database, buckets, Redis, settings and nightly backups ready. First release `v0.1.0` created 2026-11-24 | A release tag `v1.2.3`, after Sami Bhai approves in GitHub |
 
-Each environment has its own server, database, buckets, Redis and settings. Nothing is shared
-except the image registry, which holds the same image both environments run.
+Each environment has its own server, database, database user, buckets, Redis and settings. Two
+things are shared: the image registry, which holds the same image both environments run, and, for
+now, the Atlas cluster (Sami Bhai, 2026-11-24: one free cluster for both servers until the paid
+tier is approved; each environment has its own database and user on it, see MongoDB Atlas below).
 
 ## Resource inventory
 
@@ -54,11 +56,17 @@ admin rights (today: the client's admin, and Sami Bhai as `BridgeHead_Sami`).
 | Pictures bucket (BE-10) | `dreambuilder-pictures-staging-010834800857` | `dreambuilder-pictures-prod-010834800857` | Only its own server, and AWS admins |
 | Voice recordings bucket (BE-15) | `dreambuilder-voice-staging-010834800857` | `dreambuilder-voice-prod-010834800857` | Same. Browsers may upload/download with signed links from the frontend's address only (CORS) |
 | Print files bucket (BE-18) | `dreambuilder-print-staging-010834800857` | `dreambuilder-print-prod-010834800857` | Only its own server, and AWS admins |
+| Database backups bucket | `dreambuilder-backups-staging-010834800857` | `dreambuilder-backups-prod-010834800857` | Its own server may add and read backups but not delete them; S3 deletes copies after 14 days. AWS admins |
 | Settings and secrets | Parameter Store `/dreambuilder/staging/` | `/dreambuilder/prod/` | Read: only its own server. Read/write: AWS admins |
 | Admin-only secrets | `/dreambuilder-internal/staging/` | `/dreambuilder-internal/prod/` | AWS admins only (the Redis password, kept so `REDIS_URL` can be rebuilt) |
-| MongoDB Atlas cluster | `dreambuilder-staging` (see below) | Not yet created | Database user per environment. Network: the server's Elastic IP plus named developer IPs |
+| MongoDB Atlas database | `dream_builder_staging` on cluster `dreambuilder-staging` (see below) | `dream_builder_prod` on the same cluster, for now | One database user per environment, allowed only its own database. Network: the two servers' Elastic IPs plus named developer IPs |
 | GitHub environment | `staging` | `production` (Sami Bhai must approve) | Repo admins |
 | Deploy role (GitHub OIDC) | `dreambuilder-deploy-staging` | `dreambuilder-deploy-prod` | Only that GitHub environment of `BridgesHead/dream-builder-app`. It can push the image and deploy to its own server only |
+
+The deploy roles trust GitHub's ID-based name for the repo,
+`repo:BridgesHead@360629568/dream-builder-app@1442847901:environment:<env>`. That is the form GitHub
+sends for this organisation's repos (seen in CloudTrail, 2026-11-24); a role that trusts the plain
+`BridgesHead/dream-builder-app` name is refused. `setup-iam.sh` uses it by default.
 
 All buckets block public access, encrypt at rest (SSE-S3) and enforce bucket-owner object ownership.
 Redis uses encryption in transit and at rest, and the `noeviction` policy that BullMQ requires
@@ -79,18 +87,29 @@ failure loses queued jobs that have not run; good enough for staging and launch,
 Atlas organisation: "Dina's Org" (Athar Interactive Media). Dina is Organization Owner; Sami Bhai is
 Organization Project Creator and Project Owner of the project below.
 
-| | Staging (created 2026-11-24) | Production (not created yet) |
+| | Staging | Production |
 | --- | --- | --- |
 | Project | `Dream Builder` | same project |
-| Cluster | `dreambuilder-staging`, M0 (free), AWS Mumbai, MongoDB 8.0 | M10 or larger, AWS Mumbai (needed for backups, below) |
+| Cluster | `dreambuilder-staging`, M0 (free), AWS Mumbai, MongoDB 8.0 (created 2026-11-24) | **Same cluster for now** (Sami Bhai, 2026-11-24). Its own cluster, M10 or larger, once Dina adds a payment method in Atlas |
 | Database | `dream_builder_staging` | `dream_builder_prod` |
-| Database user | `dreambuilder-staging-api`: readWrite on `dream_builder_staging` only, limited to this cluster. Password generated by Atlas and stored only in Parameter Store | `dreambuilder-prod-api`, readWrite on `dream_builder_prod` only |
-| Network access (IP access list) | the staging server's Elastic IP; Sami Bhai's IP of the day (labelled with the date); Anas: *to add* | the production server's Elastic IP only |
+| Database user | `dreambuilder-staging-api`: readWrite on `dream_builder_staging` (and `dream_builder_staging_restore_test`, for restore tests) only, limited to this cluster | `dreambuilder-prod-api`: readWrite on `dream_builder_prod` (and `dream_builder_prod_restore_test`) only |
 | Connection string | Parameter Store `/dreambuilder/staging/MONGODB_URI` | `/dreambuilder/prod/MONGODB_URI` |
+
+Passwords are generated by Atlas and stored only in Parameter Store. Network access (IP access list,
+shared by both because it belongs to the project): the staging and production Elastic IPs, and
+developer IPs labelled with name and date (Sami Bhai today; Anas: *to add*).
 
 Developers get their own Atlas user for staging if they need one; nobody connects to the
 production database from a laptop. Home internet IPs change: when one does, add the new one in
 Atlas → Database & Network Access → IP Access List and delete the old entry.
+
+**Sharing the free cluster, and what changes later.** M0 has a 512 MB limit shared by both
+databases, limited throughput, and no Atlas backups (our own nightly backups cover that, see
+Backups). Moving production to its own M10 later: create the cluster and allow
+`dreambuilder-prod-api` on it; stop the production API, run `backup.sh`, point
+`/dreambuilder/prod/MONGODB_URI` at the new cluster, run `restore.sh restore <that backup> --yes`,
+then redeploy. M10 in Mumbai is listed at $0.08 an hour, about $58 a month, before backup storage;
+it adds Atlas snapshots with point-in-time restore.
 
 ## Settings (Parameter Store)
 
@@ -101,6 +120,8 @@ writes them to `/opt/dreambuilder/app.env` (mode 600) on the server.
 | Variable | Type | Set by |
 | --- | --- | --- |
 | `S3_REGION`, `S3_BUCKET`, `S3_VOICE_BUCKET`, `S3_PRINT_BUCKET` | String | `setup-env.sh` (always) |
+| `S3_BACKUP_BUCKET` | String | `setup-env.sh` (always). Read by `backup.sh` and `restore.sh`; the API ignores it |
+| `BACKUP_RETENTION_DAYS` (`16`) | String | `setup-env.sh` (always). The data-deletion email tells parents when the last backup copy is gone: S3 deletes copies after 14 days, rounded up to the next midnight and removed in the background, hence 16. Change it together with `BACKUP_DAYS` in `setup-iam.sh` |
 | `REDIS_URL` | SecureString | `setup-env.sh`, once Redis is up |
 | `JWT_ACCESS_SECRET` | SecureString | `setup-env.sh`, random, only if missing |
 | `API_URL`, `APP_URL`, `SITE_ADDRESS` | String | `setup-env.sh` with the temporary sslip.io name, only if missing. Change when the domains exist |
@@ -156,18 +177,45 @@ GitHub setup (repo admin, once): Settings → Environments →
 
 MongoDB (Atlas) and Redis (ElastiCache) are managed services outside the server.
 
+Also on each server: the systemd timer `dreambuilder-backup.timer`, which runs `backup.sh` every night
+(see Backups), and `restore.sh`.
+
+## Backups
+
+Every night at 02:30 Pakistan time (21:30 UTC, give or take 10 minutes) each server copies its own
+database with `mongodump` into its own backups bucket:
+`s3://dreambuilder-backups-<env>-010834800857/mongodb/YYYY/MM/DD/<env>-<UTC time>.archive.gz`.
+The tools come from the official `mongo:8.0` image, so nothing extra is installed on the server; the
+connection string reaches the container through its environment, never a command line or a log.
+S3 deletes copies after 14 days. A server can add and read its own backups but cannot delete them
+or see the other environment's.
+
+```bash
+sudo /opt/dreambuilder/backup.sh                     # take a backup now
+sudo /opt/dreambuilder/restore.sh list               # what's there, newest last
+sudo /opt/dreambuilder/restore.sh test               # restore the newest into <db>_restore_test, compare, clean up
+sudo /opt/dreambuilder/restore.sh restore KEY --yes  # REPLACE the live database with backup KEY
+systemctl list-timers dreambuilder-backup.timer      # when the next one runs
+journalctl -u dreambuilder-backup --since today      # how the last one went
+```
+
+`test` never touches the live database. This is a nightly copy, so a restore can lose up to a day
+of changes; restore to a chosen minute (point-in-time) needs the paid Atlas tier (AWS-02, below).
+
 ## Files
 
 | Path | Purpose |
 | --- | --- |
-| `aws/setup-iam.sh` | CloudShell, once: server role, GitHub sign-in, the six buckets, deploy roles. Safe to re-run |
+| `aws/setup-iam.sh` | CloudShell, once: server role, GitHub sign-in, the eight buckets, deploy roles. Safe to re-run |
 | `aws/setup-env.sh` | CloudShell, once per environment: Elastic IP, Redis, settings. `--set NAME` adds a secret |
 | `aws/ssm-bootstrap.py` | CloudShell: sets up or updates both servers through SSM (`tar -czf kit.tgz -C infra server` first) |
 | `aws/bridgehead-iam-policy.json` | The narrow IAM rights the setup user needed. Remove after setup (AWS-04) |
 | `server/docker-compose.yml` | The three containers above |
 | `server/deploy.sh` | Deploy one image tag with the current settings; roll back if unhealthy |
-| `server/bootstrap.sh` | One-time server setup: folder, ECR login through the server role, AWS CLI, swap |
+| `server/bootstrap.sh` | Server setup: folder, ECR login through the server role, AWS CLI, swap, backup timer. Safe to re-run |
 | `server/Caddyfile` | HTTPS and security headers in front of the API |
+| `server/backup.sh`, `server/dreambuilder-backup.service`, `server/dreambuilder-backup.timer` | The nightly database backup |
+| `server/restore.sh` | List, test-restore or restore a backup |
 
 ## Runbook
 
@@ -175,14 +223,17 @@ MongoDB (Atlas) and Redis (ElastiCache) are managed services outside the server.
 - **Deploy or roll back by hand:** on the server, `sudo /opt/dreambuilder/deploy.sh <commit sha>`.
 - **Shell on a server:** EC2 console → instance → Connect → Session Manager.
 - **Logs:** `cd /opt/dreambuilder && sudo docker compose logs -f api worker`
-- **Health:** `curl https://13-234-72-174.sslip.io/api/v1/health`
+- **Health:** `curl https://13-234-72-174.sslip.io/api/v1/health` (production: `https://16-4-70-84.sslip.io/api/v1/health`)
+- **Backups:** see Backups above. Record every restore test in the table below.
+- **Disk:** `deploy.sh` removes images older than 3 days after each successful deploy, so old
+  releases do not fill the 19 GB disk; one needed for a rollback is pulled again from ECR.
 
 ## AWS-02 items waiting on a decision
 
-- **Backups and point-in-time restore.** The free M0 cluster has no backups. Daily snapshots with
-  point-in-time restore need M10 or larger (a monthly cost) for production, and for staging if wanted.
-  Once approved: turn on Cloud Backup with continuous restore, restore once into a scratch cluster,
-  and record it in the table below.
+- **Point-in-time restore.** Nightly backups are running (above). Restoring to a chosen minute needs
+  production on its own M10 or larger cluster with Cloud Backup and continuous restore turned on.
+  Waiting for Dina to add a payment method in Atlas. Then: move production (see MongoDB Atlas),
+  turn on continuous restore, restore once into a scratch cluster, and record it below.
 - **Listening-page domain.** The PRD suggests `voiceanchor.dreambuilder.com`. Needs whoever controls
   the domain's DNS. The link printed in QR codes must be fixed before the first print run; proposed:
   `https://voiceanchor.<domain>/l/<random id>` (random, unguessable, never a database ID or a name).
@@ -205,9 +256,13 @@ Run on the staging server against the real services, with the API image built fr
 
 ### Restore tests
 
-| Date | Environment | Restored to | Point in time | Checked | By |
+| Date | Environment | Backup | Restored to | Checked | By |
 | --- | --- | --- | --- | --- | --- |
-| — | — | — | — | — | — |
+| 2026-11-24 | staging | `staging-20261124T121525Z` (25 marker documents written just before it) | `dream_builder_staging_restore_test` | `restore.sh test`: 25 documents restored, 0 failed; document counts per collection match the live database; copy removed, markers removed | Claude for Sami Bhai |
+| 2026-11-24 | production | `prod-20261124T121421Z` (database still empty, app not yet deployed) | `dream_builder_prod_restore_test` | `restore.sh test`: restore ran, counts match (no collections yet) | Claude for Sami Bhai |
+
+Also checked on 2026-11-24: a server cannot delete its own backups (AccessDenied) or list the other
+environment's backups bucket (AccessDenied).
 
 ## Still to do
 
