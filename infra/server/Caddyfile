@@ -1,0 +1,18 @@
+# SITE_ADDRESS is ":80" until a domain exists, e.g. "api-staging.example.com".
+# With a real domain, Caddy fetches a Let's Encrypt certificate by itself.
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	reverse_proxy api:3000
+
+	log {
+		output stdout
+	}
+}
