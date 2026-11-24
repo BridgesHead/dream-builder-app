@@ -93,7 +93,9 @@ for _ in $(seq 1 36); do   # up to 3 minutes
   case "$status" in
     healthy|no-healthcheck)
       echo "Deployed $TAG ($status)"
-      docker image prune -f >/dev/null || true
+      # Keep the disk from filling up: remove images that are older than 3 days and not
+      # running. One that is needed later (a rollback, the backup tools) is pulled again.
+      docker image prune -af --filter "until=72h" >/dev/null || true
       exit 0 ;;
     unhealthy)
       break ;;
