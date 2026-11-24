@@ -58,7 +58,7 @@ admin rights (today: the client's admin, and Sami Bhai as `BridgeHead_Sami`).
 | Admin-only secrets | `/dreambuilder-internal/staging/` | `/dreambuilder-internal/prod/` | AWS admins only (the Redis password, kept so `REDIS_URL` can be rebuilt) |
 | MongoDB Atlas cluster | `dreambuilder-staging` (see below) | Not yet created | Database user per environment. Network: the server's Elastic IP plus named developer IPs |
 | GitHub environment | `staging` | `production` (Sami Bhai must approve) | Repo admins |
-| Deploy role (GitHub OIDC) | `dreambuilder-deploy-staging` | `dreambuilder-deploy-prod` | Only that GitHub environment of `iamKhan79690/dream-builder-app`. It can push the image and deploy to its own server only |
+| Deploy role (GitHub OIDC) | `dreambuilder-deploy-staging` | `dreambuilder-deploy-prod` | Only that GitHub environment of `BridgesHead/dream-builder-app`. It can push the image and deploy to its own server only |
 
 All buckets block public access, encrypt at rest (SSE-S3) and enforce bucket-owner object ownership.
 Redis uses encryption in transit and at rest, and the `noeviction` policy that BullMQ requires
