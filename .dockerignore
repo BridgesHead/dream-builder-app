@@ -10,7 +10,8 @@
 **/.env.*
 !**/.env.example
 
-# The frontend is built by Netlify. Its package.json stays so pnpm sees the whole workspace.
+# The frontend has its own image (apps/web/Dockerfile, with its own ignore file). Its
+# package.json stays here so pnpm sees the whole workspace.
 apps/web/*
 !apps/web/package.json
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Deploys one API image tag (API + worker) and rolls back if the API does not become healthy.
+# Deploys one commit: the API + worker image (<tag>) and the frontend image (web-<tag>), and
+# rolls back if the API does not become healthy or the frontend does not start.
 # Called by .github/workflows/deploy-api.yml through SSM:  /opt/dreambuilder/deploy.sh <image-tag>
 # Can also be run by hand:             sudo /opt/dreambuilder/deploy.sh <image-tag>
 # After changing a setting in Parameter Store, re-run it with the current tag to apply it:
@@ -22,11 +23,21 @@ flock -n 9 || { echo "Another deploy is already running" >&2; exit 3; }
 PREV_TAG="$(sed -n 's/^IMAGE_TAG=//p' .env | tail -n1)"
 set_tag() { sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=$1|" .env; }
 
+set_env() {   # name, value: sets one line of .env
+  if grep -q "^$1=" .env; then sed -i "s|^$1=.*|$1=$2|" .env; else echo "$1=$2" >> .env; fi
+}
+
 backend_health() {
   local id
   id="$(docker compose ps -q api 2>/dev/null || true)"
   [ -n "$id" ] || { echo missing; return; }
   docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' "$id" 2>/dev/null || echo missing
+}
+
+web_running() {
+  local id
+  id="$(docker compose ps -q web 2>/dev/null || true)"
+  [ -n "$id" ] && [ "$(docker inspect -f '{{.State.Running}}' "$id" 2>/dev/null)" = true ]
 }
 
 # Settings and secrets come from Parameter Store (/dreambuilder/<env>/), read with the
@@ -67,32 +78,33 @@ render_settings() {
   mv "$tmp" app.env
   # Caddy's HTTPS name is also a setting; Compose reads it from .env
   site="$(sed -n "s/^SITE_ADDRESS='\(.*\)'$/\1/p" app.env)"
-  if [ -n "$site" ]; then
-    if grep -q '^SITE_ADDRESS=' .env; then sed -i "s|^SITE_ADDRESS=.*|SITE_ADDRESS=$site|" .env
-    else echo "SITE_ADDRESS=$site" >> .env; fi
-  fi
+  [ -z "$site" ] || set_env SITE_ADDRESS "$site"
   echo "Settings: $(grep -c . app.env) values from /dreambuilder/$env/"
 }
 
 echo "Deploying $TAG (previous: ${PREV_TAG:-none})"
 render_settings
 
-# Pull first; .env is only changed once the image is actually here. Tags are commit SHAs,
-# so an image already on this server (a redeploy to apply settings) is not pulled again.
+# Pull first; .env is only changed once the images are actually here. Tags are commit SHAs,
+# so images already on this server (a redeploy to apply settings) are not pulled again.
 ECR_REPO="$(sed -n 's/^ECR_REPO=//p' .env)"
-if docker image inspect "$ECR_REPO:$TAG" >/dev/null 2>&1; then
-  echo "Image $TAG is already on this server"
+if docker image inspect "$ECR_REPO:$TAG" >/dev/null 2>&1 \
+   && docker image inspect "$ECR_REPO:web-$TAG" >/dev/null 2>&1; then
+  echo "Images for $TAG are already on this server"
 else
-  IMAGE_TAG="$TAG" docker compose pull api worker
+  IMAGE_TAG="$TAG" docker compose pull api worker web
 fi
 set_tag "$TAG"
+# Caddy reads its Caddyfile only at start; a new hash makes Compose restart it (docker-compose.yml)
+set_env CADDYFILE_HASH "$(sha256sum Caddyfile | cut -c1-12)"
 docker compose up -d --remove-orphans
 
 for _ in $(seq 1 36); do   # up to 3 minutes
   status="$(backend_health)"
+  if [ "$status" != unhealthy ] && ! web_running; then status="$status, frontend not running"; fi
   case "$status" in
     healthy|no-healthcheck)
-      echo "Deployed $TAG ($status)"
+      echo "Deployed $TAG ($status, frontend running)"
       # Keep the disk from filling up: remove images that are older than 3 days and not
       # running. One that is needed later (a rollback, the backup tools) is pulled again.
       docker image prune -af --filter "until=72h" >/dev/null || true
@@ -103,8 +115,8 @@ for _ in $(seq 1 36); do   # up to 3 minutes
   sleep 5
 done
 
-echo "API did not become healthy on $TAG (last status: $status)" >&2
-docker compose logs --tail=50 api worker >&2 || true
+echo "Not healthy on $TAG (last status: $status)" >&2
+docker compose logs --tail=50 api worker web >&2 || true
 
 if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" != "$TAG" ] && [ "$PREV_TAG" != "none" ]; then
   echo "Rolling back to $PREV_TAG" >&2

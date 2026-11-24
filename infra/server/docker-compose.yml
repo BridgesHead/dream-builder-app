@@ -1,5 +1,6 @@
 # Runs on each server in /opt/dreambuilder (copied there by bootstrap.sh).
-#   /opt/dreambuilder/.env     DEPLOY_ENV, ECR_REPO, IMAGE_TAG, SITE_ADDRESS (bootstrap.sh / deploy.sh)
+#   /opt/dreambuilder/.env     DEPLOY_ENV, ECR_REPO, IMAGE_TAG, SITE_ADDRESS, CADDYFILE_HASH
+#                              (bootstrap.sh / deploy.sh)
 #   /opt/dreambuilder/app.env  the API's settings, written by deploy.sh from Parameter Store
 #                              (/dreambuilder/<env>/) at every deploy. Mode 600. Never edit by hand.
 # MongoDB is Atlas, Redis is ElastiCache, pictures/voice/print are S3: nothing stateful runs here.
@@ -33,9 +34,23 @@ services:
     healthcheck:
       disable: true # the image's check calls the API port, which the worker doesn't open
 
+  web:
+    # The frontend (apps/web/Dockerfile): the built site, served by its own small Caddy on
+    # port 8080. Same commit as the API, tagged web-<commit> in the same ECR repository.
+    image: ${ECR_REPO}:web-${IMAGE_TAG}
+    restart: unless-stopped
+    expose:
+      - "8080"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   caddy:
-    # HTTPS in front of the API. Caddy gets and renews the certificate for SITE_ADDRESS
-    # by itself (Let's Encrypt, falling back to ZeroSSL).
+    # HTTPS in front of everything: /api/* goes to the API, the rest to the frontend.
+    # Caddy gets and renews the certificate for SITE_ADDRESS by itself (Let's Encrypt,
+    # falling back to ZeroSSL).
     image: caddy:2-alpine
     restart: unless-stopped
     ports:
@@ -43,12 +58,16 @@ services:
       - "443:443"
     environment:
       SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+      # Caddy reads the Caddyfile only when it starts. deploy.sh sets this to the file's hash,
+      # so a changed Caddyfile changes the service and Compose restarts Caddy with it.
+      CADDYFILE_HASH: ${CADDYFILE_HASH:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
       - api
+      - web
     logging:
       driver: json-file
       options:

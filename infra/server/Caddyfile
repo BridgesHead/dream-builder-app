@@ -1,5 +1,7 @@
-# SITE_ADDRESS is ":80" until a domain exists, e.g. "api-staging.example.com".
+# SITE_ADDRESS is ":80" until a domain exists, e.g. "staging.example.com".
 # With a real domain, Caddy fetches a Let's Encrypt certificate by itself.
+# One address for the whole app: /api/* is the API, everything else is the frontend, so the
+# browser sees a single origin (no CORS, and the login cookie stays first-party).
 {$SITE_ADDRESS} {
 	encode zstd gzip
 
@@ -10,7 +12,13 @@
 		-Server
 	}
 
-	reverse_proxy api:3000
+	handle /api/* {
+		reverse_proxy api:3000
+	}
+
+	handle {
+		reverse_proxy web:8080
+	}
 
 	log {
 		output stdout

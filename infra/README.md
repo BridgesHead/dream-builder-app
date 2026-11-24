@@ -8,7 +8,7 @@ Parameter Store (SecureString, encrypted with KMS) and are only read by the serv
 
 | Story | What it covers | Status |
 | --- | --- | --- |
-| AWS-01 | Hosting for the API and worker, MongoDB Atlas, picture bucket, Redis (ElastiCache), secrets, CI deploy, email | Staging live and tested end to end; the pipeline deploys it on every merge to `main` (2026-11-24). The dev server is skipped; email not started |
+| AWS-01 | Hosting for the API and worker, MongoDB Atlas, picture bucket, Redis (ElastiCache), secrets, CI deploy, email | Staging live and tested end to end; the pipeline deploys it on every merge to `main` (2026-11-24). The frontend is served from the same servers (see Environments). The dev server is skipped; email not started |
 | AWS-02 | Staging and production copies, voice and print buckets, listening-page domain, backups, alerts | Copies and buckets done. Nightly backups with a tested restore done; point-in-time restore waits for the paid Atlas tier. Domain and alerts wait on decisions (below) |
 | AWS-03 | Autoscaling, WAF, IAM review, encryption checks, budgets and dashboards | Not started |
 | AWS-04 | Production go-live and handover of access | Not started |
@@ -27,6 +27,11 @@ database and buckets, switch DNS. MongoDB Atlas is in AWS Mumbai as
 well, so the app and its database stay in the same region.
 
 ## Environments
+
+Open the app (frontend at `/`, API under `/api/v1`, one address per environment):
+
+- Staging: https://13-234-72-174.sslip.io
+- Production: https://16-4-70-84.sslip.io
 
 | Environment | Status | Deployed by |
 | --- | --- | --- |
@@ -51,7 +56,7 @@ admin rights (today: the client's admin, and Sami Bhai as `BridgeHead_Sami`).
 | Server (EC2, Ubuntu, Arm) | `i-0bd3b0c3c9230134a`, t4g.small, ap-south-1c | `i-0670e3aa9833ddc69`, m7g.medium, ap-south-1b | AWS admins through Session Manager. SSH (port 22) only from Sami Bhai's IP (one /32 address) |
 | Fixed public IP (Elastic IP) | `13.234.72.174` | `16.4.70.84` | Public on 80/443 (Caddy, HTTPS). Atlas trusts these addresses |
 | Firewall (security group) | `dreambuilder-staging-sg` | `dreambuilder-prod-sg` | 80, 443 from anywhere; 22 from Sami Bhai's IP only |
-| Temporary API address | `https://13-234-72-174.sslip.io` | `https://16-4-70-84.sslip.io` | Public. Replaced by real domains when DNS is ready |
+| Temporary app address (frontend at `/`, API at `/api/v1`) | `https://13-234-72-174.sslip.io` | `https://16-4-70-84.sslip.io` | Public. Replaced by real domains when DNS is ready |
 | Redis (ElastiCache, Valkey 8.2) | `dreambuilder-staging-redis` | `dreambuilder-prod-redis` | Only its own server (security group `dreambuilder-<env>-redis-sg`, port 6379), with TLS and a password |
 | Pictures bucket (BE-10) | `dreambuilder-pictures-staging-010834800857` | `dreambuilder-pictures-prod-010834800857` | Only its own server, and AWS admins |
 | Voice recordings bucket (BE-15) | `dreambuilder-voice-staging-010834800857` | `dreambuilder-voice-prod-010834800857` | Same. Browsers may upload/download with signed links from the frontend's address only (CORS) |
@@ -146,18 +151,23 @@ A changed setting is used at the next deploy. To apply it now, on the server:
 ## How a deploy works
 
 ```
-merge to main ──► build image (arm64) ──► ECR :<commit> ──► SSM ──► staging server
-tag v1.2.3    ──► Sami Bhai approves ──► same image :<commit> ──► SSM ──► production server
+merge to main ──► build 2 images (arm64) ──► ECR :<commit>, :web-<commit> ──► SSM ──► staging server
+tag v1.2.3    ──► Sami Bhai approves ──► same images ──► SSM ──► production server
 ```
 
-1. `.github/workflows/deploy-api.yml` builds `apps/api/Dockerfile` once per merge to `main`, pushes it to
-   ECR tagged with the commit, and tells the staging server (through AWS Systems Manager, no SSH) to run
-   `/opt/dreambuilder/deploy.sh <commit>`.
-2. `deploy.sh` renders the settings from Parameter Store, pulls the image, restarts the API and the
-   worker and waits for `GET /api/v1/health`. If the new version is not healthy within 3 minutes it
-   switches back to the previous one and the workflow fails.
+1. `.github/workflows/deploy-api.yml` builds two images once per merge to `main` and pushes them to ECR
+   (`dreambuilder-backend`): `apps/api/Dockerfile` tagged with the commit (API + worker) and
+   `apps/web/Dockerfile` tagged `web-<commit>` (the frontend). It then tells the staging server (through
+   AWS Systems Manager, no SSH) to run `/opt/dreambuilder/deploy.sh <commit>`.
+2. `deploy.sh` renders the settings from Parameter Store, pulls both images, restarts the API, the
+   worker and the frontend, and waits for `GET /api/v1/health` and the frontend container. If they are
+   not up within 3 minutes it switches back to the previous version and the workflow fails.
 3. Production never builds. A tag `vX.Y.Z` on a commit that already ran on staging waits for Sami Bhai's
-   approval in GitHub, then deploys that exact image.
+   approval in GitHub, then deploys those exact images.
+
+`deploy.sh`, `docker-compose.yml` and the `Caddyfile` live on the server and are changed by
+`bootstrap.sh` (`ssm-bootstrap.py`), not by the pipeline: after changing them in the repo, rerun
+`ssm-bootstrap.py` before the next deploy. A changed `Caddyfile` is picked up at that deploy.
 
 No AWS keys are stored in GitHub: each environment signs in with OIDC to its own deploy role.
 
@@ -173,7 +183,8 @@ GitHub setup (repo admin, once): Settings → Environments →
 | --- | --- |
 | `api` | The API (`tsx src/index.ts`), port 3000 inside Docker only |
 | `worker` | Same image, `tsx src/worker.ts`: takes story jobs off the Redis queue |
-| `caddy` | Ports 80/443; gets and renews the HTTPS certificate for `SITE_ADDRESS` |
+| `web` | The frontend (`apps/web`, built by Vite), served by its own small Caddy on port 8080 inside Docker only. Pages the app routes itself (`/parent/dashboard`, ...) get `index.html` |
+| `caddy` | Ports 80/443; gets and renews the HTTPS certificate for `SITE_ADDRESS`; sends `/api/*` to `api` and everything else to `web`, so the browser sees one origin (no CORS, first-party login cookie) |
 
 MongoDB (Atlas) and Redis (ElastiCache) are managed services outside the server.
 
@@ -210,10 +221,11 @@ of changes; restore to a chosen minute (point-in-time) needs the paid Atlas tier
 | `aws/setup-env.sh` | CloudShell, once per environment: Elastic IP, Redis, settings. `--set NAME` adds a secret |
 | `aws/ssm-bootstrap.py` | CloudShell: sets up or updates both servers through SSM (`tar -czf kit.tgz -C infra server` first) |
 | `aws/bridgehead-iam-policy.json` | The narrow IAM rights the setup user needed. Remove after setup (AWS-04) |
-| `server/docker-compose.yml` | The three containers above |
+| `server/docker-compose.yml` | The four containers above |
 | `server/deploy.sh` | Deploy one image tag with the current settings; roll back if unhealthy |
 | `server/bootstrap.sh` | Server setup: folder, ECR login through the server role, AWS CLI, swap, backup timer. Safe to re-run |
-| `server/Caddyfile` | HTTPS and security headers in front of the API |
+| `server/Caddyfile` | HTTPS and security headers in front of the app; `/api/*` to the API, the rest to the frontend |
+| `../apps/web/Dockerfile`, `../apps/web/Caddyfile` | The frontend image and how it serves the built site |
 | `server/backup.sh`, `server/dreambuilder-backup.service`, `server/dreambuilder-backup.timer` | The nightly database backup |
 | `server/restore.sh` | List, test-restore or restore a backup |
 
@@ -224,6 +236,7 @@ of changes; restore to a chosen minute (point-in-time) needs the paid Atlas tier
 - **Shell on a server:** EC2 console → instance → Connect → Session Manager.
 - **Logs:** `cd /opt/dreambuilder && sudo docker compose logs -f api worker`
 - **Health:** `curl https://13-234-72-174.sslip.io/api/v1/health` (production: `https://16-4-70-84.sslip.io/api/v1/health`)
+- **Logs of the frontend:** `cd /opt/dreambuilder && sudo docker compose logs -f web caddy`
 - **Backups:** see Backups above. Record every restore test in the table below.
 - **Disk:** `deploy.sh` removes images older than 3 days after each successful deploy, so old
   releases do not fill the 19 GB disk; one needed for a rollback is pulled again from ECR.
