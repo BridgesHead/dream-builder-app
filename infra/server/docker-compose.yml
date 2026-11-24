@@ -1,0 +1,60 @@
+# Runs on each server in /opt/dreambuilder (copied there by bootstrap.sh).
+#   /opt/dreambuilder/.env     DEPLOY_ENV, ECR_REPO, IMAGE_TAG, SITE_ADDRESS (bootstrap.sh / deploy.sh)
+#   /opt/dreambuilder/app.env  the API's settings, written by deploy.sh from Parameter Store
+#                              (/dreambuilder/<env>/) at every deploy. Mode 600. Never edit by hand.
+# MongoDB is Atlas, Redis is ElastiCache, pictures/voice/print are S3: nothing stateful runs here.
+
+name: dreambuilder
+
+x-app: &app
+  image: ${ECR_REPO:?set ECR_REPO in .env}:${IMAGE_TAG:?set IMAGE_TAG in .env}
+  env_file: app.env
+  environment:
+    NODE_ENV: production
+    PORT: "3000"
+    BUILD_VERSION: ${IMAGE_TAG}
+  init: true
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  api:
+    <<: *app
+    expose:
+      - "3000"
+
+  worker:
+    <<: *app
+    command: ["./node_modules/.bin/tsx", "src/worker.ts"]
+    healthcheck:
+      disable: true # the image's check calls the API port, which the worker doesn't open
+
+  caddy:
+    # HTTPS in front of the API. Caddy gets and renews the certificate for SITE_ADDRESS
+    # by itself (Let's Encrypt, falling back to ZeroSSL).
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  caddy_data:
+  caddy_config:
