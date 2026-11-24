@@ -1,0 +1,10 @@
+{
+  "name": "@dream-builder/api-contracts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The OpenAPI contract for the Dream Builder API: the source of truth for every route.",
+  "exports": {
+    "./openapi.yaml": "./openapi.yaml"
+  }
+}

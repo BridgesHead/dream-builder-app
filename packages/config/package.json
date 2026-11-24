@@ -1,0 +1,19 @@
+{
+  "name": "@dream-builder/config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared settings: TypeScript base config and the ESLint base config.",
+  "exports": {
+    "./tsconfig.base.json": "./tsconfig.base.json",
+    "./eslint": "./eslint.base.js"
+  },
+  "peerDependencies": {
+    "@eslint/js": "*",
+    "typescript-eslint": "*"
+  },
+  "peerDependenciesMeta": {
+    "@eslint/js": { "optional": true },
+    "typescript-eslint": { "optional": true }
+  }
+}
