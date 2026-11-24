@@ -32,7 +32,7 @@ well, so the app and its database stay in the same region.
 | --- | --- | --- |
 | dev | **Not created** (Sami Bhai, 2026-11-24: "skip it at the moment"). Staging plays its part: every merge to `main` lands there. | — |
 | staging | Live | Every merge to `main`, automatically |
-| production | Server, database, buckets, Redis, settings and nightly backups ready. First release `v0.1.0` created 2026-11-24 | A release tag `v1.2.3`, after Sami Bhai approves in GitHub |
+| production | Live since 2026-11-24 (release `v0.1.0`, approved by Sami Bhai), with nightly backups | A release tag `v1.2.3`, after Sami Bhai approves in GitHub |
 
 Each environment has its own server, database, database user, buckets, Redis and settings. Two
 things are shared: the image registry, which holds the same image both environments run, and, for
@@ -260,6 +260,7 @@ Run on the staging server against the real services, with the API image built fr
 | --- | --- | --- | --- | --- | --- |
 | 2026-11-24 | staging | `staging-20261124T121525Z` (25 marker documents written just before it) | `dream_builder_staging_restore_test` | `restore.sh test`: 25 documents restored, 0 failed; document counts per collection match the live database; copy removed, markers removed | Claude for Sami Bhai |
 | 2026-11-24 | production | `prod-20261124T121421Z` (database still empty, app not yet deployed) | `dream_builder_prod_restore_test` | `restore.sh test`: restore ran, counts match (no collections yet) | Claude for Sami Bhai |
+| 2026-11-24 | production | `prod-20261124T150720Z` (after the first deploy: the app's 13 collections, no documents yet) | `dream_builder_prod_restore_test` | `restore.sh test`: all 13 collections restored, counts match; copy removed | Claude for Sami Bhai |
 
 Also checked on 2026-11-24: a server cannot delete its own backups (AccessDenied) or list the other
 environment's backups bucket (AccessDenied).
