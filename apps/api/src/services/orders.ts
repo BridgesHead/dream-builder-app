@@ -48,7 +48,10 @@ export function listPrices() {
 }
 
 type OrderDoc = NonNullable<Awaited<ReturnType<typeof Order.findOne>>>;
-type OrderLike = Pick<OrderDoc, "orderNumber" | "storyId" | "tier" | "amountFils" | "paymentStatus" | "printStatus" | "deliveryAddress" | "paidAt" | "createdAt"> & {
+type OrderLike = Pick<
+  OrderDoc,
+  "orderNumber" | "storyId" | "tier" | "amountFils" | "amountPaidFils" | "discountFils" | "promoCode" | "paymentStatus" | "printStatus" | "deliveryAddress" | "paidAt" | "createdAt"
+> & {
   _id: unknown;
 };
 
@@ -59,7 +62,11 @@ function orderView(o: OrderLike) {
     orderNumber: o.orderNumber,
     storyId: String(o.storyId),
     tier: o.tier,
+    // The full price, then (once paid) what was actually paid and any promo code's discount.
     amount: o.amountFils / 100,
+    amountPaid: o.amountPaidFils == null ? null : o.amountPaidFils / 100,
+    discount: (o.discountFils ?? 0) / 100,
+    promoCode: o.promoCode ?? null,
     currency: "AED",
     paymentStatus: o.paymentStatus,
     printStatus: o.printStatus,
@@ -152,6 +159,7 @@ export async function startCheckout(buyer: ParentBuyer, input: { storyId: string
       successUrl: `${config.appUrl}/checkout/success?order=${orderId}`,
       cancelUrl: `${config.appUrl}/checkout/pay?plan=${input.tier}&order=${orderId}&cancelled=1`,
       expiresAt: new Date(Date.now() + config.payments.checkoutExpiresMinutes * 60_000),
+      allowPromotionCodes: config.payments.promoCodesEnabled,
       // One key per page of this order: a resent request gets the same page, not a second one.
       idempotencyKey: `order-${orderId}-page-${order.stripeSessionIds.length + 1}-${order.amountFils}`,
     });
@@ -210,10 +218,28 @@ async function markPaid(session: Session, eventId: string) {
     logger.warn({ eventId, sessionId: session.id }, "Stripe webhook for an unknown order; ignored");
     return null;
   }
-  // The charge must match what we asked for: our amount, in AED.
-  if (session.amount_total !== order.amountFils || session.currency !== "aed") {
-    logger.error({ eventId, orderId: String(order._id), expected: order.amountFils, got: session.amount_total, currency: session.currency }, "Stripe amount doesn't match the order; not marked paid");
+  // The charge must match what we asked for, in AED: our amount, or our amount minus a real
+  // promo code's discount (Stripe lists the code in `discounts`). Anything else is refused.
+  const paid = session.amount_total ?? -1;
+  const discount = session.total_details?.amount_discount ?? 0;
+  const promo = session.discounts?.find((d) => d.promotion_code)?.promotion_code ?? null;
+  const promoId = typeof promo === "string" ? promo : (promo?.id ?? null);
+  const fits = paid >= 0 && paid + discount === order.amountFils && (discount === 0 || (session.discounts?.length ?? 0) > 0);
+  if (!fits || session.currency !== "aed") {
+    logger.error(
+      { eventId, orderId: String(order._id), expected: order.amountFils, got: session.amount_total, discount, currency: session.currency },
+      "Stripe amount doesn't match the order; not marked paid",
+    );
     return order._id;
+  }
+  // The words the parent typed ("TEST20"), for the order page and support. Best effort.
+  let promoCode = typeof promo === "object" && promo ? promo.code : null;
+  if (!promoCode && promoId) {
+    try {
+      promoCode = await getPaymentProvider().promotionCodeText(promoId);
+    } catch (err) {
+      logger.warn({ orderId: String(order._id), reason: err instanceof Error ? err.message : String(err) }, "Could not read the promo code's words");
+    }
   }
   const paymentIntent = typeof session.payment_intent === "string" ? session.payment_intent : (session.payment_intent?.id ?? null);
   // From any unpaid status to paid, ONCE: a paid order never changes again, whatever arrives later.
@@ -224,6 +250,10 @@ async function markPaid(session: Session, eventId: string) {
         paymentStatus: "paid",
         paidAt: new Date(),
         stripePaymentIntentId: paymentIntent,
+        amountPaidFils: paid,
+        discountFils: discount,
+        promoCode,
+        stripePromotionCodeId: promoId,
         // A paid hardback joins the print queue (BE-18, BE-19).
         ...(order.tier === "hardback" && { printStatus: "waiting" }),
       },
@@ -231,7 +261,7 @@ async function markPaid(session: Session, eventId: string) {
   );
   if (moved.modifiedCount > 0) {
     await writeAudit({ actorId: null, actorRole: "system", action: "order.paid", targetType: "order", targetId: String(order._id) });
-    logger.info({ orderId: String(order._id), orderNumber: order.orderNumber, tier: order.tier }, "Order paid");
+    logger.info({ orderId: String(order._id), orderNumber: order.orderNumber, tier: order.tier, paidFils: paid, discountFils: discount }, "Order paid");
   }
   return order._id;
 }
@@ -257,7 +287,8 @@ export async function handleStripeEvent(event: Stripe.Event): Promise<"handled" 
     case "checkout.session.completed": {
       const session = event.data.object;
       // "unpaid" = a slow method (e.g. a bank transfer) still on its way: async_payment_* follows.
-      if (session.payment_status === "paid") orderId = await markPaid(session, event.id);
+      // "no_payment_required" = a 100%-off promo code made it free: that counts as paid.
+      if (session.payment_status === "paid" || session.payment_status === "no_payment_required") orderId = await markPaid(session, event.id);
       else orderId = (await orderForSession(session))?._id ?? null;
       break;
     }

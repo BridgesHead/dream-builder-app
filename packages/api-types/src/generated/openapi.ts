@@ -1004,8 +1004,14 @@ export interface components {
             orderNumber: string;
             storyId: string;
             tier: components["schemas"]["OrderTier"];
-            /** @description In AED */
+            /** @description The full price in AED */
             amount: number;
+            /** @description What was actually paid in AED (null until paid); amount minus discount */
+            amountPaid: number | null;
+            /** @description A promo code's discount in AED (0 when none) */
+            discount: number;
+            /** @description The promo code typed on Stripe's page */
+            promoCode: string | null;
             /** @constant */
             currency: "AED";
             /** @enum {string} */

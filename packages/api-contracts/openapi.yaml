@@ -1411,13 +1411,16 @@ components:
 
     Order:
       type: object
-      required: [id, orderNumber, storyId, tier, amount, currency, paymentStatus, printStatus, deliveryAddress, paidAt, createdAt]
+      required: [id, orderNumber, storyId, tier, amount, amountPaid, discount, promoCode, currency, paymentStatus, printStatus, deliveryAddress, paidAt, createdAt]
       properties:
         id: { type: string }
         orderNumber: { type: string }
         storyId: { type: string }
         tier: { $ref: "#/components/schemas/OrderTier" }
-        amount: { type: number, description: In AED }
+        amount: { type: number, description: The full price in AED }
+        amountPaid: { type: [number, "null"], description: What was actually paid in AED (null until paid); amount minus discount }
+        discount: { type: number, description: A promo code's discount in AED (0 when none) }
+        promoCode: { type: [string, "null"], description: The promo code typed on Stripe's page, e.g. TEST20 }
         currency: { type: string, const: AED }
         paymentStatus: { type: string, enum: [pending, paid, failed, cancelled] }
         printStatus: { type: string }

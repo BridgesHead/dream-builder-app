@@ -104,6 +104,9 @@ const envSchema = z.object({
   DELIVERY_HARDBACK_AED: z.coerce.number().min(0).max(10_000).default(0),
   // How long Stripe's payment page stays open (Stripe allows 30 minutes to 24 hours).
   CHECKOUT_EXPIRES_MINUTES: z.coerce.number().int().min(30).max(24 * 60).default(60),
+  // Shows the "Add promotion code" box on Stripe's page. The codes themselves are made in the
+  // Stripe dashboard (Product catalogue → Coupons). "false" hides the box everywhere.
+  PROMO_CODES_ENABLED: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
 
   // ---- Data deletion (BE-16) ----
   // How long database backups are kept (AWS-02 sets the real value). The confirmation email
@@ -183,6 +186,7 @@ export const config = {
     prices: { digital: parsed.data.PRICE_DIGITAL_AED, hardback: parsed.data.PRICE_HARDBACK_AED },
     delivery: { digital: 0, hardback: parsed.data.DELIVERY_HARDBACK_AED },
     checkoutExpiresMinutes: parsed.data.CHECKOUT_EXPIRES_MINUTES,
+    promoCodesEnabled: parsed.data.PROMO_CODES_ENABLED,
   },
   deletion: {
     backupRetentionDays: parsed.data.BACKUP_RETENTION_DAYS,

@@ -21,6 +21,8 @@ export interface CheckoutRequest {
   successUrl: string;
   cancelUrl: string;
   expiresAt: Date;
+  /** Shows Stripe's "Add promotion code" box (the codes are made in the Stripe dashboard). */
+  allowPromotionCodes: boolean;
   /** Same key = Stripe makes the page only once, even if our request is sent twice. */
   idempotencyKey: string;
 }
@@ -31,6 +33,8 @@ export interface PaymentProvider {
   createCheckout(req: CheckoutRequest): Promise<{ sessionId: string; url: string }>;
   /** Closes an old payment page (when the parent starts a new one). Best effort. */
   expireCheckout(sessionId: string): Promise<void>;
+  /** The words of a promo code ("TEST20") from Stripe's id for it ("promo_…"). */
+  promotionCodeText(promotionCodeId: string): Promise<string | null>;
 }
 
 // ---- The real Stripe ----------------------------------------------------------------------
@@ -65,6 +69,8 @@ function stripeProvider(key: string): PaymentProvider {
           success_url: req.successUrl,
           cancel_url: req.cancelUrl,
           expires_at: Math.floor(req.expiresAt.getTime() / 1000),
+          // Stripe checks the code (expired, used up, wrong) and lowers the total itself.
+          ...(req.allowPromotionCodes && { allow_promotion_codes: true }),
         },
         { idempotencyKey: req.idempotencyKey },
       );
@@ -73,6 +79,9 @@ function stripeProvider(key: string): PaymentProvider {
     },
     async expireCheckout(sessionId) {
       await stripeClient(key).checkout.sessions.expire(sessionId);
+    },
+    async promotionCodeText(promotionCodeId) {
+      return (await stripeClient(key).promotionCodes.retrieve(promotionCodeId)).code;
     },
   };
 }
@@ -83,9 +92,12 @@ function stripeProvider(key: string): PaymentProvider {
 export const fakeStripe = {
   sessions: [] as (CheckoutRequest & { sessionId: string; expired: boolean })[],
   failNext: false,
+  /** Promo codes the fake knows: Stripe's id → the words the parent typed. */
+  promotionCodes: {} as Record<string, string>,
   reset(): void {
     this.sessions = [];
     this.failNext = false;
+    this.promotionCodes = {};
   },
 };
 
@@ -103,6 +115,9 @@ const fakeProvider: PaymentProvider = {
   async expireCheckout(sessionId) {
     const s = fakeStripe.sessions.find((x) => x.sessionId === sessionId);
     if (s) s.expired = true;
+  },
+  async promotionCodeText(promotionCodeId) {
+    return fakeStripe.promotionCodes[promotionCodeId] ?? null;
   },
 };
 

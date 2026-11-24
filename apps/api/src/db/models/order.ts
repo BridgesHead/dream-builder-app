@@ -59,6 +59,13 @@ const orderSchema = new Schema(
     stripeSessionIds: { type: [{ type: String, maxlength: 255 }], default: [] },
     stripePaymentIntentId: { type: String, maxlength: 255, default: null },
     paidAt: { type: Date, default: null },
+    // Set when paid. A promo code typed on Stripe's page lowers what was paid:
+    // amountPaidFils + discountFils = amountFils. A 100%-off code pays 0.
+    amountPaidFils: { type: Number, min: 0, default: null },
+    discountFils: { type: Number, min: 0, default: 0 },
+    // The code the parent typed, e.g. "TEST20", and Stripe's id for it.
+    promoCode: { type: String, maxlength: 100, default: null },
+    stripePromotionCodeId: { type: String, maxlength: 255, default: null },
   },
   baseSchemaOptions,
 );

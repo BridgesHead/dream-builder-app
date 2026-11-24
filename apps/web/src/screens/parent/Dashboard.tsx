@@ -195,7 +195,7 @@ export function DashboardScreen() {
 
         {order && plan && author && (
           <Section title="Orders">
-            <Row title={storyTitle} detail={meta(`Order ${order.orderNumber}`, plan.title, `${CURRENCY} ${order.amount.toLocaleString()}`, `By ${author.name}`)}>
+            <Row title={storyTitle} detail={meta(`Order ${order.orderNumber}`, plan.title, `${CURRENCY} ${order.amount.toLocaleString()}${order.promoCode ? ` (${order.promoCode})` : ""}`, `By ${author.name}`)}>
               <Pill tone={digital ? "green" : "amber"}>{digital ? "Ready to download" : "Being prepared"}</Pill>
               <TextLink onClick={() => asChild(author, ROUTES.success)}>{digital ? "Download" : "View Order"}</TextLink>
             </Row>

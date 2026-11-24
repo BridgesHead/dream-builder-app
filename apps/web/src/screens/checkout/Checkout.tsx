@@ -117,7 +117,7 @@ export function PayScreen() {
       const trimmed = Object.fromEntries(Object.entries(address).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v)) as unknown as DeliveryAddress;
       const { order, checkoutUrl } = await startCheckout({ storyId: storyId!, tier: plan.id, ...(physical && { deliveryAddress: trimmed }) });
       // Remembered for the success screen; it only counts once the server says "paid".
-      updateParent({ order: { id: order.id, plan: order.tier, orderNumber: order.orderNumber, amount: order.amount, paymentStatus: order.paymentStatus } });
+      updateParent({ order: { id: order.id, plan: order.tier, orderNumber: order.orderNumber, amount: order.amountPaid ?? order.amount, promoCode: order.promoCode, paymentStatus: order.paymentStatus } });
       // Off to Stripe's own payment page.
       window.location.assign(checkoutUrl);
     } catch (err) {
@@ -262,7 +262,7 @@ export function SuccessScreen() {
         if (cancelled) return;
         setServer(order);
         if (order.paymentStatus !== "pending") {
-          updateParent({ order: { id: order.id, plan: order.tier, orderNumber: order.orderNumber, amount: order.amount, paymentStatus: order.paymentStatus } });
+          updateParent({ order: { id: order.id, plan: order.tier, orderNumber: order.orderNumber, amount: order.amountPaid ?? order.amount, promoCode: order.promoCode, paymentStatus: order.paymentStatus } });
           return;
         }
       } catch (err) {
@@ -320,7 +320,9 @@ export function SuccessScreen() {
   }
 
   const orderNumber = server?.orderNumber ?? remembered!.orderNumber;
-  const amount = server?.amount ?? remembered!.amount;
+  // What was actually paid: a promo code typed on Stripe's page lowers it.
+  const amount = server ? (server.amountPaid ?? server.amount) : remembered!.amount;
+  const discount = server?.discount ?? 0;
 
   return (
     <AppShell>
@@ -339,6 +341,12 @@ export function SuccessScreen() {
             <Row k="Story" v={`${possessive(heroName)} Magical Journey`} />
             <Row k="Format" v={plan.title} />
             <Row k="Order Number" v={orderNumber} />
+            {discount > 0 && server && (
+              <>
+                <Row k="Price" v={price(server.amount)} />
+                <Row k={server.promoCode ? `Discount (${server.promoCode})` : "Discount"} v={`− ${price(discount)}`} />
+              </>
+            )}
             <div className="flex justify-between">
               <dt className="text-ink-muted">Amount Paid:</dt>
               <dd className="font-bold text-brand">{price(amount)}</dd>
