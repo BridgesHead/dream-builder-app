@@ -63,6 +63,15 @@ Any future expiry date, any CVC, any name.
 
 Watch the `stripe listen` terminal: `checkout.session.completed` should answer `[200]`.
 
+## 4b. Promo codes (discounts)
+
+Codes are made in the Stripe dashboard, not in our code: **Product catalogue → Coupons → + Create coupon**,
+then add a customer-facing code (e.g. `TEST20`) under the coupon. Stripe's payment page shows
+"Add promotion code" (switch it off with `PROMO_CODES_ENABLED=false`). Stripe checks the code; our
+webhook accepts the lower total only when paid + discount = our price, saves `amountPaidFils`,
+`discountFils` and `promoCode`, and treats a 100%-off code (`no_payment_required`) as paid.
+Coupons made for AED orders should use a percentage, or a fixed amount in **AED**.
+
 ## 5. Before dev, staging and production (AWS-02, AWS-04)
 
 - In the Stripe dashboard → Developers → Webhooks, add an endpoint

@@ -86,8 +86,10 @@ export interface ChildProfile {
 export interface Order {
   plan: PlanId;
   orderNumber: string;
-  /** In AED. */
+  /** What was paid, in AED (after any promo code). */
   amount: number;
+  /** The promo code used on Stripe's page, e.g. "TEST20". */
+  promoCode?: string | null;
   /** The server's order id (backend BE-17); missing for demo data. */
   id?: string;
   /** Missing for demo data (counts as paid). */

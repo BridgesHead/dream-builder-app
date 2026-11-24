@@ -1,0 +1,8 @@
+[Unit]
+Description=Dream Builder: back up the MongoDB database to S3 (infra/server/backup.sh)
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/dreambuilder/backup.sh
