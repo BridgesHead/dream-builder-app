@@ -131,6 +131,7 @@ writes them to `/opt/dreambuilder/app.env` (mode 600) on the server.
 | `JWT_ACCESS_SECRET` | SecureString | `setup-env.sh`, random, only if missing |
 | `API_URL`, `APP_URL`, `SITE_ADDRESS` | String | `setup-env.sh` with the temporary sslip.io name, only if missing. Change when the domains exist |
 | `LOG_LEVEL` (`info`), `AI_PROVIDER` (`stub`), `CONSENT_TEXT_VERSION`, `TRUST_PROXY_HOPS` (`1`) | String | `setup-env.sh`, only if missing |
+| `EMAIL_FROM`, `SES_REGION` | String | `setup-ses.sh` (see Email below). Without `EMAIL_FROM` the servers send no email and log that |
 | `MONGODB_URI` | SecureString | By hand, from Atlas |
 | `FAL_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | SecureString | By hand, when the keys exist. Staging takes Stripe **test** keys only; the API refuses a live key outside production |
 
@@ -191,6 +192,30 @@ MongoDB (Atlas) and Redis (ElastiCache) are managed services outside the server.
 Also on each server: the systemd timer `dreambuilder-backup.timer`, which runs `backup.sh` every night
 (see Backups), and `restore.sh`.
 
+## Email (Amazon SES)
+
+The API sends three emails: confirm your email (sign-up), reset your password, and the data-deletion
+notice. On the servers they go through Amazon SES in Mumbai, from `EMAIL_FROM`; a refused email is
+logged (`Email NOT sent`, without the address or the link) and never breaks the request.
+
+```bash
+bash infra/aws/setup-ses.sh sender@example.com tester1@example.com tester2@example.com
+```
+
+Each address gets a confirmation email from AWS ("Amazon Web Services – Email Address Verification
+Request"); open the link within 24 hours. The script also lets the servers send (policy `email`,
+sender only) and saves `EMAIL_FROM` for both environments, used from the next deploy.
+
+**The SES sandbox.** A new AWS account can email only confirmed addresses, at most 200 a day. That is
+enough for Sami Bhai and Anas to test both environments: add every tester's address with the script.
+Real parents need **production access**: SES console → Account dashboard → *Request production
+access* (mail type *Transactional*, the website, and how bounces and complaints are handled). AWS
+answers within about a day.
+
+**For launch** the emails should come from Dina's domain (guide AWS-01), not a personal address:
+`DOMAIN=<domain> bash infra/aws/setup-ses.sh hello@<domain>` prints three DKIM records to add at the
+domain's DNS host; once SES sees them, any address `@<domain>` can send and lands in inboxes, not spam.
+
 ## Backups
 
 Every night at 02:30 Pakistan time (21:30 UTC, give or take 10 minutes) each server copies its own
@@ -219,6 +244,7 @@ of changes; restore to a chosen minute (point-in-time) needs the paid Atlas tier
 | --- | --- |
 | `aws/setup-iam.sh` | CloudShell, once: server role, GitHub sign-in, the eight buckets, deploy roles. Safe to re-run |
 | `aws/setup-env.sh` | CloudShell, once per environment: Elastic IP, Redis, settings. `--set NAME` adds a secret |
+| `aws/setup-ses.sh` | CloudShell: email sender and testers in SES, the servers' right to send, `EMAIL_FROM`. Safe to re-run |
 | `aws/ssm-bootstrap.py` | CloudShell: sets up or updates both servers through SSM (`tar -czf kit.tgz -C infra server` first) |
 | `aws/bridgehead-iam-policy.json` | The narrow IAM rights the setup user needed. Remove after setup (AWS-04) |
 | `server/docker-compose.yml` | The four containers above |
@@ -236,6 +262,8 @@ of changes; restore to a chosen minute (point-in-time) needs the paid Atlas tier
 - **Shell on a server:** EC2 console → instance → Connect → Session Manager.
 - **Logs:** `cd /opt/dreambuilder && sudo docker compose logs -f api worker`
 - **Health:** `curl https://13-234-72-174.sslip.io/api/v1/health` (production: `https://16-4-70-84.sslip.io/api/v1/health`)
+- **Emails:** `sudo docker compose logs api worker | grep -i email` shows each `Email sent` or
+  `Email NOT sent` with the reason (never the address or the link).
 - **Logs of the frontend:** `cd /opt/dreambuilder && sudo docker compose logs -f web caddy`
 - **Backups:** see Backups above. Record every restore test in the table below.
 - **Disk:** `deploy.sh` removes images older than 3 days after each successful deploy, so old
@@ -281,5 +309,5 @@ environment's backups bucket (AccessDenied).
 ## Still to do
 
 - Close port 22 once Session Manager is the only way in
-- Transactional email, error tracking, uptime checks and alerts, budgets
+- Email from Dina's domain and SES production access (see Email), error tracking, uptime checks and alerts, budgets
 - Move to UAE (`me-central-1`) when AWS restores it

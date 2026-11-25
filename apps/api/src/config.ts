@@ -29,6 +29,12 @@ const envSchema = z.object({
     .refine((v) => !v.startsWith("replace-me"), "still the placeholder from .env.example: make your own secret"),
   // The frontend's address. Links in emails point here, e.g. <APP_URL>/verify-email?token=...
   APP_URL: z.url().default("http://localhost:5173"),
+  // Who emails come from on the servers, e.g. "Dream Builder <hello@example.com>". Sent through
+  // Amazon SES (infra/aws/setup-ses.sh confirms the address first). Not set: emails are NOT sent
+  // and the API logs that. On your PC emails are printed in the terminal either way.
+  EMAIL_FROM: unsetIfEmpty(z.string().regex(/^[^@\s<>]+@[^@\s<>]+$|^[^<>]+<[^@\s<>]+@[^@\s<>]+>$/, 'must be an email address, or "Name <address>"')),
+  // The AWS region of SES (where the sender address was confirmed).
+  SES_REGION: z.string().min(1).default("ap-south-1"),
   // Which version of the consent text parents agree to. Change it when the text changes;
   // every new consent then records the new version (old records stay as they were).
   CONSENT_TEXT_VERSION: z.string().min(1).max(50).default("2026-11-v1"),
@@ -151,6 +157,10 @@ export const config = {
   logLevel: parsed.data.LOG_LEVEL,
   jwtAccessSecret: parsed.data.JWT_ACCESS_SECRET,
   appUrl: parsed.data.APP_URL.replace(/\/$/, ""),
+  email: {
+    from: parsed.data.EMAIL_FROM ?? null,
+    sesRegion: parsed.data.SES_REGION,
+  },
   consentTextVersion: parsed.data.CONSENT_TEXT_VERSION,
   trustProxyHops: parsed.data.TRUST_PROXY_HOPS,
   redisUrl: parsed.data.REDIS_URL ?? null,
