@@ -163,6 +163,11 @@ put_param "$P/S3_REGION" "$REGION" String
 put_param "$P/S3_BUCKET" "dreambuilder-pictures-$ENV_NAME-$ACCOUNT" String
 put_param "$P/S3_VOICE_BUCKET" "dreambuilder-voice-$ENV_NAME-$ACCOUNT" String
 put_param "$P/S3_PRINT_BUCKET" "dreambuilder-print-$ENV_NAME-$ACCOUNT" String
+put_param "$P/S3_BACKUP_BUCKET" "dreambuilder-backups-$ENV_NAME-$ACCOUNT" String   # backup.sh
+# What the data-deletion email tells parents about backups. The backups bucket deletes copies
+# after 14 days (setup-iam.sh BACKUP_DAYS); S3 rounds that up to the next midnight and removes
+# them in the background, so 16 is the honest "gone by" figure. Change both together.
+put_param "$P/BACKUP_RETENTION_DAYS" 16 String
 echo "    bucket names and region written"
 
 # The rest is only set if missing, so later edits in Parameter Store are kept.

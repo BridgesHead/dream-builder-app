@@ -63,4 +63,13 @@ elif ! grep -q '^AWS_REGION=' "$APP_DIR/.env"; then
   echo "AWS_REGION=${AWS_REGION:-ap-south-1}" >> "$APP_DIR/.env"
 fi
 
+echo "==> Nightly database backup (02:30 Pakistan time) to the environment's S3 backups bucket"
+install -m 750 "$SRC_DIR/backup.sh" "$APP_DIR/backup.sh"
+install -m 750 "$SRC_DIR/restore.sh" "$APP_DIR/restore.sh"
+install -m 644 "$SRC_DIR/dreambuilder-backup.service" /etc/systemd/system/dreambuilder-backup.service
+install -m 644 "$SRC_DIR/dreambuilder-backup.timer" /etc/systemd/system/dreambuilder-backup.timer
+systemctl daemon-reload
+systemctl enable --now dreambuilder-backup.timer
+systemctl list-timers dreambuilder-backup.timer --no-pager | sed -n 2p
+
 echo "==> Done. Settings live in Parameter Store (/dreambuilder/$ENV_NAME/); the pipeline deploys."

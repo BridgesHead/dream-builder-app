@@ -1,11 +1,15 @@
+import { SendEmailCommand, SESv2Client } from "@aws-sdk/client-sesv2";
 import { config } from "../config.js";
 import { logger } from "../lib/logger.js";
 
 // Sending emails. Which "mailer" is used depends on where the API runs:
 //   development: prints the email in YOUR terminal, so you can click the link (no real email)
 //   test:        keeps emails in `outbox`, so tests can read the link
-//   production:  no real sender yet (it arrives with AWS-01). Logs that an email was NOT sent,
-//                without the link. Sami Bhai's email setup replaces this.
+//   production:  sends it through Amazon SES from EMAIL_FROM (staging and prod servers).
+//                Without EMAIL_FROM: logs that an email was NOT sent, without the link.
+//
+// Sending never throws: a lost email must not break sign-up or give away whether an account
+// exists (forgot password). The parent can ask for the email again.
 
 export interface Email {
   to: string;
@@ -15,6 +19,14 @@ export interface Email {
 
 // Emails "sent" while testing, newest last. Only filled when NODE_ENV is "test".
 export const outbox: Email[] = [];
+
+// One SES client for the whole API, made on first use. AWS credentials come from the server's
+// IAM role (dreambuilder-ec2-role, policy "email" from infra/aws/setup-ses.sh).
+let ses: SESv2Client | null = null;
+const sesClient = () => (ses ??= new SESv2Client({ region: config.email.sesRegion }));
+
+// SES error messages can contain the recipient's address: never log one of those.
+const withoutAddresses = (text: string) => text.replace(/[^\s@<>"',;:]+@[^\s@<>"',;:]+/g, "<address>");
 
 export async function sendEmail(email: Email): Promise<void> {
   switch (config.nodeEnv) {
@@ -40,8 +52,30 @@ export async function sendEmail(email: Email): Promise<void> {
       return;
 
     case "production":
-      // Never log the text: it contains a secret link.
-      logger.warn({ subject: email.subject }, "Email NOT sent: no email sender is configured yet (AWS-01)");
+      // Never log the text (it contains a secret link) or the address (personal data).
+      if (!config.email.from) {
+        logger.warn({ subject: email.subject }, "Email NOT sent: EMAIL_FROM is not set (see infra/aws/setup-ses.sh)");
+        return;
+      }
+      try {
+        const sent = await sesClient().send(
+          new SendEmailCommand({
+            FromEmailAddress: config.email.from,
+            Destination: { ToAddresses: [email.to] },
+            Content: {
+              Simple: {
+                Subject: { Data: email.subject, Charset: "UTF-8" },
+                Body: { Text: { Data: email.text, Charset: "UTF-8" } },
+              },
+            },
+          }),
+        );
+        logger.info({ subject: email.subject, messageId: sent.MessageId }, "Email sent");
+      } catch (err) {
+        // e.g. MessageRejected while SES is in its sandbox and the address isn't confirmed there.
+        const e = err as Error;
+        logger.error({ subject: email.subject, error: e.name, reason: withoutAddresses(e.message ?? "") }, "Email NOT sent: Amazon SES refused it");
+      }
       return;
   }
 }

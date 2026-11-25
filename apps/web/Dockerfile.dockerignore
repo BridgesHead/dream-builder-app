@@ -1,0 +1,18 @@
+# Build context for apps/web/Dockerfile only (Docker reads this file instead of /.dockerignore).
+.git
+.github
+.turbo
+**/node_modules
+**/dist
+**/coverage
+**/*.tsbuildinfo
+**/.env
+**/.env.*
+
+# The API's code isn't needed. Its package.json stays so pnpm sees the whole workspace.
+apps/api/*
+!apps/api/package.json
+
+Dream-Builder-Generated-Art
+infra
+netlify.toml
