@@ -1,9 +1,9 @@
 import { Router } from "express";
 import { AppError } from "../lib/errors.js";
-import { readSignedLocal } from "../lib/storage.js";
+import { readSignedLocal, safeFileName } from "../lib/storage.js";
 import { allow } from "../middleware/access.js";
 
-// Pictures from the LOCAL storage folder (guide BE-10), for your PC only. Mounted at
+// Pictures (and BE-18 book PDFs) from the LOCAL storage folder (guide BE-10), for your PC only. Mounted at
 // /api/v1/media. On AWS, pictures come straight from S3 through S3's own signed links, so
 // this route answers 404 there.
 //
@@ -17,7 +17,7 @@ export function createMediaRouter(storageKind: "s3" | "local"): Router {
   // GET /api/v1/media/stories/<id>/panel-03.png?expires=...&sig=...
   router.get("/*key", allow("public"), async (req, res) => {
     const key = ([] as string[]).concat(req.params.key as string | string[]).join("/");
-    const { expires, sig } = req.query;
+    const { expires, sig, download } = req.query;
     const file =
       storageKind === "local" && typeof expires === "string" && typeof sig === "string"
         ? await readSignedLocal(key, expires, sig)
@@ -28,6 +28,11 @@ export function createMediaRouter(storageKind: "s3" | "local"): Router {
       "Content-Type": file.contentType,
       "Cache-Control": "private, max-age=3600",
       "X-Content-Type-Options": "nosniff",
+      // A book PDF (BE-18): "download" makes the browser save it with a friendly name. The
+      // name is not part of the signature, so it is cleaned here again.
+      ...(typeof download === "string" && file.contentType === "application/pdf" && {
+        "Content-Disposition": `attachment; filename="${safeFileName(download)}.pdf"`,
+      }),
     });
     res.send(file.body);
     return;

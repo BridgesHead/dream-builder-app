@@ -2,9 +2,11 @@ import { randomInt } from "node:crypto";
 import { isValidObjectId, type Types } from "mongoose";
 import type Stripe from "stripe";
 import { config } from "../config.js";
-import { Order, StripeEvent, type OrderTier } from "../db/models/index.js";
+import { Order, Story, StripeEvent, type OrderTier } from "../db/models/index.js";
+import { queueBookPdf } from "../jobs/bookPdf.js";
 import { AppError } from "../lib/errors.js";
 import { logger } from "../lib/logger.js";
+import { getStorage } from "../lib/storage.js";
 import { getPaymentProvider } from "../payments/provider.js";
 import { writeAudit } from "./audit.js";
 import { findReachableStory } from "./stories.js";
@@ -15,6 +17,8 @@ import { findReachableStory } from "./stories.js";
 //                    → a Stripe Checkout page → the browser goes there
 //   the webhook      Stripe says "paid" → order paid (once, ever) → audit "order.paid"
 //                    → a hardback joins the print queue (printStatus "waiting", BE-18/19)
+//                    → the book PDF job starts (BE-18, jobs/bookPdf.ts)
+//   GET /orders/:id/download   the PDF is ready? → a short-lived link (paying parent only)
 //
 // The browser never sends a price: the request schema has no price field, and the amount
 // always comes from config.payments.
@@ -53,14 +57,18 @@ type OrderLike = Pick<
   "orderNumber" | "storyId" | "tier" | "amountFils" | "amountPaidFils" | "discountFils" | "promoCode" | "paymentStatus" | "printStatus" | "deliveryAddress" | "paidAt" | "createdAt"
 > & {
   _id: unknown;
+  // Optional: orders paid before BE-18 have none.
+  pdfStatus?: string | null;
 };
 
 /** What the API sends about an order: no Stripe ids, no parent id. */
-function orderView(o: OrderLike) {
+function orderView(o: OrderLike, storyTitle: string | null = null) {
   return {
     id: String(o._id),
     orderNumber: o.orderNumber,
     storyId: String(o.storyId),
+    // The bought story's title, so screens never show another story's name next to this order.
+    storyTitle,
     tier: o.tier,
     // The full price, then (once paid) what was actually paid and any promo code's discount.
     amount: o.amountFils / 100,
@@ -70,6 +78,8 @@ function orderView(o: OrderLike) {
     currency: "AED",
     paymentStatus: o.paymentStatus,
     printStatus: o.printStatus,
+    // The book PDF (BE-18): the Download button works once this is "ready".
+    pdfStatus: o.pdfStatus ?? "not_started",
     deliveryAddress: o.deliveryAddress ?? null,
     paidAt: o.paidAt ?? null,
     createdAt: o.createdAt,
@@ -183,7 +193,7 @@ export async function startCheckout(buyer: ParentBuyer, input: { storyId: string
   if (created) {
     await writeAudit({ actorId: buyer.parentId, actorRole: "parent", action: "order.create", targetType: "order", targetId: orderId, ipAddress: buyer.ip });
   }
-  return { order: orderView(order), checkoutUrl: checkout.url };
+  return { order: orderView(order, story.title || null), checkoutUrl: checkout.url };
 }
 
 /** GET /orders/:id: one of the caller's orders (404 for anyone else's). */
@@ -191,14 +201,35 @@ export async function getOrder(parentId: string, orderId: string) {
   if (!isValidObjectId(orderId)) throw new AppError(404, "NOT_FOUND", "Order not found");
   const order = await Order.findOne({ _id: orderId, parentId }).lean();
   if (!order) throw new AppError(404, "NOT_FOUND", "Order not found");
-  return orderView(order);
+  const story = await Story.findById(order.storyId, { title: 1 }).lean();
+  return orderView(order, story?.title || null);
+}
+
+/**
+ * GET /orders/:id/download (BE-18): a short-lived link to the book PDF. Only the parent who
+ * paid: anyone else gets 404. Not paid yet, or the PDF still being made: 409.
+ */
+export async function downloadLink(buyer: ParentBuyer, orderId: string) {
+  if (!isValidObjectId(orderId)) throw new AppError(404, "NOT_FOUND", "Order not found");
+  const order = await Order.findOne({ _id: orderId, parentId: buyer.parentId }).lean();
+  if (!order) throw new AppError(404, "NOT_FOUND", "Order not found");
+  if (order.paymentStatus !== "paid") throw new AppError(409, "NOT_PAID", "This order isn't paid yet");
+  if (order.pdfStatus !== "ready" || !order.pdfKey) {
+    throw new AppError(409, "PDF_NOT_READY", "Your PDF is still being prepared. Please try again in a minute.");
+  }
+  const story = await Story.findById(order.storyId, { title: 1 }).lean();
+  const link = await getStorage().link(order.pdfKey, { downloadName: story?.title || `Dream-Builder-${order.orderNumber}` });
+  await writeAudit({ actorId: buyer.parentId, actorRole: "parent", action: "order.download", targetType: "order", targetId: orderId, ipAddress: buyer.ip });
+  return { url: link.url, expiresAt: link.expiresAt };
 }
 
 /** GET /orders: the caller's orders, newest first (optionally for one story). */
 export async function listOrders(parentId: string, storyId?: string) {
   if (storyId !== undefined && !isValidObjectId(storyId)) return [];
   const orders = await Order.find({ parentId, ...(storyId && { storyId }) }).sort({ createdAt: -1 }).lean();
-  return orders.map(orderView);
+  const stories = await Story.find({ _id: { $in: orders.map((o) => o.storyId) } }, { title: 1 }).lean();
+  const titles = new Map(stories.map((s) => [String(s._id), s.title || null]));
+  return orders.map((o) => orderView(o, titles.get(String(o.storyId)) ?? null));
 }
 
 // ---- The Stripe webhook -------------------------------------------------------------------------
@@ -261,6 +292,11 @@ async function markPaid(session: Session, eventId: string) {
   );
   if (moved.modifiedCount > 0) {
     await writeAudit({ actorId: null, actorRole: "system", action: "order.paid", targetType: "order", targetId: String(order._id) });
+    // The book PDF (BE-18). If the queue is down, the order stays paid: the PDF can be made later
+    // (pnpm book-pdf <orderId>), so Stripe is not asked to send the webhook again.
+    await queueBookPdf(String(order._id)).catch((err: unknown) => {
+      logger.error({ orderId: String(order._id), reason: err instanceof Error ? err.message : String(err) }, "Could not queue the book PDF");
+    });
     logger.info({ orderId: String(order._id), orderNumber: order.orderNumber, tier: order.tier, paidFils: paid, discountFils: discount }, "Order paid");
   }
   return order._id;

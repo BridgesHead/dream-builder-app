@@ -79,6 +79,8 @@ const MATRIX: Entry[] = [
   { method: "post", mount: "/orders", path: "/", rule: ["verified_parent"], callers: ["parent"] },
   { method: "get", mount: "/orders", path: "/", rule: ["verified_parent"], callers: ["parent"] },
   { method: "get", mount: "/orders", path: "/:id", rule: ["verified_parent"], callers: ["parent"] },
+  // BE-18: the book PDF link (another parent's order is 404).
+  { method: "get", mount: "/orders", path: "/:id/download", rule: ["verified_parent"], callers: ["parent"] },
   { method: "post", mount: "/payments", path: "/stripe/webhook", rule: ["public"], callers: EVERYONE },
 
   // The signed link is the permission (an <img> tag can't send a token).

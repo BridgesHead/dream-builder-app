@@ -904,6 +904,31 @@ paths:
                   order: { $ref: "#/components/schemas/Order" }
         "404": { $ref: "#/components/responses/Error" }
 
+  /orders/{id}/download:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      tags: [orders]
+      summary: A short-lived link to the book PDF (BE-18), for the parent who paid only
+      description: |
+        404 for anyone else's order. 409 NOT_PAID before payment, 409 PDF_NOT_READY while the
+        PDF is still being made (the order's pdfStatus says when it is "ready").
+      operationId: downloadOrderPdf
+      x-roles: [verified_parent]
+      responses:
+        "200":
+          description: The link; it stops working at expiresAt
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, expiresAt]
+                properties:
+                  url: { type: string }
+                  expiresAt: { type: string, format: date-time }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+
   /payments/stripe/webhook:
     post:
       tags: [payments]
@@ -1283,12 +1308,14 @@ components:
 
     StorySummary:
       type: object
-      required: [id, childId, title, status, mode, storyPath, createdAt, updatedAt]
+      required: [id, childId, title, status, mode, storyPath, heroType, charName, createdAt, updatedAt]
       properties:
         id: { type: string }
         childId: { type: string }
         title: { type: [string, "null"] }
         status: { $ref: "#/components/schemas/StoryStatus" }
+        heroType: { type: [string, "null"], description: "fox, robot or knight (null until chosen): the dashboard names an untitled draft after the hero" }
+        charName: { type: string, description: The hero name the child typed (may be empty) }
         mode: { $ref: "#/components/schemas/Mode" }
         storyPath:
           oneOf:
@@ -1318,6 +1345,31 @@ components:
         authorName: { type: string }
         storyGeneratedAt: { type: [string, "null"], format: date-time }
         confirmedByChild: { type: boolean }
+        comicCells:
+          description: A comic's cells (BE-11), page by page; empty for a storybook.
+          type: array
+          items: { $ref: "#/components/schemas/ComicCell" }
+
+    ComicCell:
+      description: |
+        One comic panel (BE-11). 32 (8 pages × 4) for two acts, 40 (10 × 4) for three.
+        The picture has no words in it: the book draws the balloon, the sound effect and the
+        narration line. The 4 panels of a page share one layout (their arrangement on the page).
+      type: object
+      additionalProperties: true
+      required: [page, cell, caption, dialogue, bubbleType, tempo, imageStatus]
+      properties:
+        page: { type: integer, minimum: 1, maximum: 10 }
+        cell: { type: integer, minimum: 1, maximum: 4 }
+        caption: { type: string, description: 'The short picture-book line under the panel; "" for none (the picture tells it)' }
+        dialogue: { type: [string, "null"], description: What someone says or thinks }
+        bubbleType: { type: string, enum: [speech, thought, whisper, shout, none], description: "The balloon: speech (oval), thought (cloud), whisper (dashed), shout (spiky)" }
+        sfx: { type: [string, "null"], description: 'A sound effect drawn on the picture, e.g. "WHOOSH!" (at most one a page)' }
+        shot: { type: [string, "null"], enum: [wide, medium, close, full, null], description: The camera shot the picture was drawn with }
+        layout: { type: [string, "null"], enum: [big_top, big_bottom, tall, grid, null], description: "How the page's 4 panels are arranged (null: made before layouts, shown as grid)" }
+        tempo: { type: [string, "null"], description: "Tempo the musical squirrel's bubble: music notation only, e.g. ♪ ♫" }
+        imageStatus: { $ref: "#/components/schemas/WorkStatus" }
+        imageUrl: { type: [string, "null"], description: A short-lived link to the cell's picture }
 
     StoryPatch:
       description: |
@@ -1373,7 +1425,10 @@ components:
       enum: [queued, running, success, fallback, failed]
 
     StoryProgress:
-      description: Overall progress plus text and picture status per panel (Final Climb, FE-06).
+      description: |
+        Overall progress plus text and picture status per panel (Final Climb, FE-06). A comic
+        (BE-11) also has "cells": [{ number, page, cell, imageStatus }], and its progress counts
+        the cell pictures instead of panel pictures.
       type: object
       additionalProperties: true
 
@@ -1411,11 +1466,12 @@ components:
 
     Order:
       type: object
-      required: [id, orderNumber, storyId, tier, amount, amountPaid, discount, promoCode, currency, paymentStatus, printStatus, deliveryAddress, paidAt, createdAt]
+      required: [id, orderNumber, storyId, tier, amount, amountPaid, discount, promoCode, currency, paymentStatus, printStatus, pdfStatus, deliveryAddress, paidAt, createdAt]
       properties:
         id: { type: string }
         orderNumber: { type: string }
         storyId: { type: string }
+        storyTitle: { type: [string, "null"], description: "The bought story's title (null if it has none, or the story was deleted)" }
         tier: { $ref: "#/components/schemas/OrderTier" }
         amount: { type: number, description: The full price in AED }
         amountPaid: { type: [number, "null"], description: What was actually paid in AED (null until paid); amount minus discount }
@@ -1424,6 +1480,10 @@ components:
         currency: { type: string, const: AED }
         paymentStatus: { type: string, enum: [pending, paid, failed, cancelled] }
         printStatus: { type: string }
+        pdfStatus:
+          type: string
+          enum: [not_started, queued, making, ready, failed, deleted]
+          description: The book PDF (BE-18). The Download button works once it is "ready".
         deliveryAddress:
           oneOf:
             - $ref: "#/components/schemas/DeliveryAddress"

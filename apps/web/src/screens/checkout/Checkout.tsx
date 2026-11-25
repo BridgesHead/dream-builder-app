@@ -6,7 +6,7 @@ import { Arrow, Button, Card, Field, Heading, LinkButton, Subtle } from "@/compo
 import { CURRENCY, PLANS, type PlanId } from "@/data/content";
 import { inPreviewMode, useAppState } from "@/state/AppState";
 import { ApiError } from "@/lib/api";
-import { EMIRATES, getOrder, getPrices, startCheckout, type DeliveryAddress, type Prices, type ServerOrder } from "@/lib/orders";
+import { EMIRATES, getDownloadLink, getOrder, getPrices, startCheckout, type DeliveryAddress, type Prices, type ServerOrder } from "@/lib/orders";
 import { cx, possessive } from "@/lib/text";
 import { ROUTES } from "@/lib/routes";
 
@@ -239,16 +239,23 @@ function Row({ k, v }: { k: string; v: string }) {
 
 const POLL_MS = 2000;
 const POLL_FOR_MS = 90_000;
+// After payment the book PDF takes a little while (backend BE-18): keep asking up to 5 minutes.
+const PDF_POLL_FOR_MS = 5 * 60_000;
+const pdfOnTheWay = (o: ServerOrder) => o.paymentStatus === "paid" && ["not_started", "queued", "making"].includes(o.pdfStatus);
 
 export function SuccessScreen() {
   const { parent, heroName, updateParent } = useAppState();
   const search = new URLSearchParams(useSearch());
-  const remembered = parent.order;
-  const orderId = search.get("order") ?? remembered?.id ?? null;
+  const asked = search.get("order");
+  // The order this browser remembers counts only if it IS the order in the address.
+  const remembered = parent.order && (!asked || !parent.order.id || parent.order.id === asked) ? parent.order : null;
+  const orderId = asked ?? remembered?.id ?? null;
   const demo = inPreviewMode() || !orderId;
   const [server, setServer] = useState<ServerOrder | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [gaveUp, setGaveUp] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadProblem, setDownloadProblem] = useState<string | null>(null);
 
   // Stripe sends the parent back straight away, but the "paid" news comes by webhook, usually a
   // second or two later: ask the server every 2 seconds until it knows.
@@ -256,13 +263,20 @@ export function SuccessScreen() {
     if (demo || !orderId) return;
     let cancelled = false;
     const until = Date.now() + POLL_FOR_MS;
+    const pdfUntil = Date.now() + PDF_POLL_FOR_MS;
+    let told = false;
     const check = async () => {
       try {
         const order = await getOrder(orderId);
         if (cancelled) return;
         setServer(order);
         if (order.paymentStatus !== "pending") {
-          updateParent({ order: { id: order.id, plan: order.tier, orderNumber: order.orderNumber, amount: order.amountPaid ?? order.amount, promoCode: order.promoCode, paymentStatus: order.paymentStatus } });
+          if (!told) {
+            told = true;
+            updateParent({ order: { id: order.id, plan: order.tier, orderNumber: order.orderNumber, amount: order.amountPaid ?? order.amount, promoCode: order.promoCode, paymentStatus: order.paymentStatus } });
+          }
+          // Paid: keep asking until the book PDF is ready, so the Download button turns on.
+          if (pdfOnTheWay(order) && Date.now() < pdfUntil) setTimeout(() => void check(), POLL_MS);
           return;
         }
       } catch (err) {
@@ -323,6 +337,28 @@ export function SuccessScreen() {
   // What was actually paid: a promo code typed on Stripe's page lowers it.
   const amount = server ? (server.amountPaid ?? server.amount) : remembered!.amount;
   const discount = server?.discount ?? 0;
+  const pdfReady = !demo && server?.pdfStatus === "ready";
+  const pdfFailed = !demo && server?.pdfStatus === "failed";
+
+  // Asks the server for a fresh short-lived link, then the browser saves the PDF.
+  const download = async () => {
+    if (!server) return;
+    setDownloading(true);
+    setDownloadProblem(null);
+    try {
+      const { url } = await getDownloadLink(server.id);
+      window.location.assign(url);
+    } catch (err) {
+      setDownloadProblem(messageOf(err));
+    } finally {
+      setDownloading(false);
+    }
+  };
+  const downloadButton = (
+    <Button disabled={!pdfReady || downloading} onClick={() => void download()}>
+      {downloading || (!pdfReady && !pdfFailed && !demo) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />} Download Story
+    </Button>
+  );
 
   return (
     <AppShell>
@@ -338,7 +374,8 @@ export function SuccessScreen() {
         <Card>
           <h2 className="mb-3 border-b border-ink/10 pb-3 text-xs font-extrabold uppercase tracking-wide text-ink">Order Details</h2>
           <dl className="space-y-2 text-sm">
-            <Row k="Story" v={`${possessive(heroName)} Magical Journey`} />
+            {/* The bought story's own title (from the order), never another open story's name. */}
+            <Row k="Story" v={server?.storyTitle ?? `${possessive(heroName)} Magical Journey`} />
             <Row k="Format" v={plan.title} />
             <Row k="Order Number" v={orderNumber} />
             {discount > 0 && server && (
@@ -354,25 +391,34 @@ export function SuccessScreen() {
           </dl>
         </Card>
         <Card className="bg-white/70 text-center">
-          <p className="font-bold text-ink">{physical ? "Your Book Is Being Prepared" : "Your PDF Is Being Prepared"}</p>
-          {/* The PDF and print file are made in backend BE-18; tracking comes with BE-19. */}
-          <Subtle className="mt-1 text-xs">{physical ? "We'll email you when it's on its way." : "We'll email you as soon as it's ready to download."}</Subtle>
+          {/* The PDF is made by backend BE-18 (a hardback also gets one); tracking comes with BE-19. */}
+          <p className="font-bold text-ink">
+            {physical ? "Your Book Is Being Prepared" : pdfReady ? "Your PDF Is Ready!" : pdfFailed ? "We Couldn't Make Your PDF" : "Your PDF Is Being Prepared"}
+          </p>
+          <Subtle className="mt-1 text-xs">
+            {pdfFailed
+              ? "Something went wrong on our side. You won't be charged again; please contact us and we'll make it for you."
+              : physical
+                ? pdfReady
+                  ? "We'll email you when it's on its way. Meanwhile, download the PDF of your story."
+                  : "We'll email you when it's on its way."
+                : pdfReady
+                  ? "Download it any time from here."
+                  : "This usually takes under a minute. Please keep this page open."}
+          </Subtle>
           <div className="mt-4 flex flex-wrap justify-center gap-3">
+            {downloadButton}
             {physical ? (
-              <Button disabled>
+              <Button disabled variant="outline" className="border-ink/10">
                 <Truck className="h-4 w-4" /> Track My Order
               </Button>
             ) : (
-              <>
-                <Button disabled>
-                  <Download className="h-4 w-4" /> Download Story
-                </Button>
-                <LinkButton href={ROUTES.book} variant="outline" className="border-ink/10">
-                  <Eye className="h-4 w-4" /> View Story
-                </LinkButton>
-              </>
+              <LinkButton href={ROUTES.book} variant="outline" className="border-ink/10">
+                <Eye className="h-4 w-4" /> View Story
+              </LinkButton>
             )}
           </div>
+          {downloadProblem && <p className="mt-3 text-xs font-semibold text-red-700">{downloadProblem}</p>}
         </Card>
         <div className="text-center">
           <LinkButton href={ROUTES.dashboard} variant="ghost">

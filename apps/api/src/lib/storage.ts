@@ -19,7 +19,7 @@ export const IMAGE_TYPES: Record<string, string> = {
   "image/jpeg": "jpg",
   "image/webp": "webp",
 };
-const TYPE_OF_EXT: Record<string, string> = { png: "image/png", jpg: "image/jpeg", webp: "image/webp" };
+const TYPE_OF_EXT: Record<string, string> = { png: "image/png", jpg: "image/jpeg", webp: "image/webp", pdf: "application/pdf" };
 
 // Keys are made by our code only, but checked anyway so a key can never reach outside
 // the storage folder ("../").
@@ -41,6 +41,24 @@ export const panelImageKey = (storyId: string, panelNumber: number, ext: string)
 export const panelRedrawKey = (storyId: string, panelNumber: number, jobId: string, ext: string) =>
   `stories/${storyId}/panel-${String(panelNumber).padStart(2, "0")}-r${jobId}.${ext}`;
 
+/**
+ * The key for a book PDF (BE-18), inside the story's folder so a deletion (BE-16) removes it too:
+ * "stories/665f…/print/<orderId>-download.pdf" (the parent's copy) or "…-print.pdf" (the printer's).
+ */
+export const bookPdfKey = (storyId: string, orderId: string, kind: "download" | "print") => `stories/${storyId}/print/${orderId}-${kind}.pdf`;
+
+/** The key for one comic cell's picture (BE-11), e.g. "stories/665f…/cell-07.png". */
+export const comicCellKey = (storyId: string, cellNumber: number, ext: string) =>
+  `stories/${storyId}/cell-${String(cellNumber).padStart(2, "0")}.${ext}`;
+
+export interface LinkOptions {
+  /** Makes the browser save the file under this name instead of opening it. */
+  downloadName?: string;
+}
+
+/** A file name safe for a Content-Disposition header: letters, digits, "-" and "_" only. */
+export const safeFileName = (name: string) => name.normalize("NFKD").replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "story";
+
 export interface SignedLink {
   url: string;
   expiresAt: Date;
@@ -49,7 +67,9 @@ export interface SignedLink {
 export interface Storage {
   kind: "s3" | "local";
   save(key: string, body: Uint8Array, contentType: string): Promise<void>;
-  link(key: string): Promise<SignedLink>;
+  link(key: string, options?: LinkOptions): Promise<SignedLink>;
+  /** A file's bytes (BE-18 reads the pictures back to put them in the PDF). */
+  read(key: string): Promise<Uint8Array>;
   /** How many files are in a folder, e.g. "stories/665f…/" (BE-16). */
   countFolder(prefix: string): Promise<number>;
   /** Deletes every file in a folder; returns how many. Deleting an empty folder is fine (BE-16). */
@@ -84,11 +104,18 @@ export function s3Storage(bucket: string): Storage {
       checkKey(key);
       await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType }));
     },
-    async link(key) {
+    async link(key, options = {}) {
       checkKey(key);
       const seconds = config.storage.urlTtlSeconds;
-      const url = await getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn: seconds });
+      const disposition = options.downloadName ? `attachment; filename="${safeFileName(options.downloadName)}.pdf"` : undefined;
+      const url = await getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: key, ResponseContentDisposition: disposition }), { expiresIn: seconds });
       return { url, expiresAt: new Date(Date.now() + seconds * 1000) };
+    },
+    async read(key) {
+      checkKey(key);
+      const res = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+      if (!res.Body) throw new Error("Empty file in storage");
+      return res.Body.transformToByteArray();
     },
     async countFolder(prefix) {
       checkFolder(prefix);
@@ -135,11 +162,16 @@ const localStorage: Storage = {
     await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, body);
   },
-  async link(key) {
+  async link(key, options = {}) {
     checkKey(key);
     const expires = Math.floor(Date.now() / 1000) + config.storage.urlTtlSeconds;
-    const url = `${config.storage.apiUrl}/api/v1/media/${key}?expires=${expires}&sig=${signature(key, expires)}`;
+    const name = options.downloadName ? `&download=${encodeURIComponent(safeFileName(options.downloadName))}` : "";
+    const url = `${config.storage.apiUrl}/api/v1/media/${key}?expires=${expires}&sig=${signature(key, expires)}${name}`;
     return { url, expiresAt: new Date(expires * 1000) };
+  },
+  async read(key) {
+    checkKey(key);
+    return readFile(path.join(root(), key));
   },
   async countFolder(prefix) {
     checkFolder(prefix);

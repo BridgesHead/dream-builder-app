@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
+import { PRINT_PROFILE_IDS } from "./print/profiles.js";
 
 // The "version" field from package.json, e.g. "1.0.0".
 const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
@@ -9,6 +10,16 @@ const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.me
 
 // An empty value (FAL_KEY=) counts as not set.
 const unsetIfEmpty = <T extends z.ZodType>(schema: T) => z.preprocess((v) => (v === "" ? undefined : v), schema.optional());
+
+// The AI services that can make the text or the pictures ("stub" = the fake one).
+const PROVIDER_KINDS = ["stub", "fal", "gemini", "cloudflare"] as const;
+type ProviderKind = (typeof PROVIDER_KINDS)[number];
+
+/** Does this service make the text or the pictures? (Each half falls back to AI_PROVIDER.) */
+const usesService = (
+  env: { AI_PROVIDER: ProviderKind; AI_TEXT_PROVIDER?: ProviderKind; AI_IMAGE_PROVIDER?: ProviderKind },
+  kind: ProviderKind,
+) => (env.AI_TEXT_PROVIDER ?? env.AI_PROVIDER) === kind || (env.AI_IMAGE_PROVIDER ?? env.AI_PROVIDER) === kind;
 
 // Describe the environment variables we expect, with defaults for local dev.
 // z.coerce turns the string "3000" from .env into the number 3000.
@@ -40,9 +51,13 @@ const envSchema = z.object({
   // Where Redis lives, e.g. redis://127.0.0.1:6379. Set: BullMQ queue + separate workers
   // (pnpm worker). Not set: an in-memory queue inside the API, for your PC only.
   REDIS_URL: z.string().regex(/^rediss?:\/\//, "must start with redis:// or rediss://").optional(),
-  // Who makes the text and pictures: "fal" = the real AI (BE-10), "stub" = fake placeholders
-  // (tests, and your PC without a fal.ai key).
-  AI_PROVIDER: z.enum(["stub", "fal"]).default("stub"),
+  // Who makes the text and pictures: "fal" = the real AI (BE-10), "gemini" or "cloudflare" =
+  // that service for both, "stub" = fake placeholders (tests, and your PC without a key).
+  AI_PROVIDER: z.enum(PROVIDER_KINDS).default("stub"),
+  // Optional: a different service for the text or the pictures (each falls back to AI_PROVIDER).
+  // The FREE mix for testing: AI_TEXT_PROVIDER=gemini + AI_IMAGE_PROVIDER=cloudflare.
+  AI_TEXT_PROVIDER: unsetIfEmpty(z.enum(PROVIDER_KINDS)),
+  AI_IMAGE_PROVIDER: unsetIfEmpty(z.enum(PROVIDER_KINDS)),
   // How long the fake AI takes per job, so progress is visible on Final Climb.
   STUB_DELAY_MS: z.coerce.number().int().min(0).default(400),
   // Jobs one worker runs at the same time.
@@ -70,6 +85,36 @@ const envSchema = z.object({
   FAL_IMAGE_MODEL: z.string().min(1).default("fal-ai/flux/dev"),
   // One fal.ai call gives up after this long, so a stuck call can't hold a worker.
   FAL_CALL_TIMEOUT_MS: z.coerce.number().int().min(100).default(50_000),
+
+  // ---- Google Gemini (optional: AI_PROVIDER / AI_TEXT_PROVIDER / AI_IMAGE_PROVIDER = gemini) ----
+  // The key from aistudio.google.com ("Get API key"). Secret: .env or the AWS secret store only.
+  // Free tier: text only, and Google may use what we send, so made-up test children only.
+  GEMINI_API_KEY: unsetIfEmpty(z.string().min(10)),
+  GEMINI_BASE_URL: z.url().default("https://generativelanguage.googleapis.com"),
+  // gemini-2.5-* is no longer offered to new keys (checked 2026-11-25).
+  GEMINI_TEXT_MODEL: z.string().min(1).default("gemini-3.5-flash-lite"),
+  // Comma-separated: tried in order, straight away, when the main model is busy (429 / 5xx).
+  GEMINI_TEXT_BACKUP_MODELS: z.string().default("gemini-3.5-flash"),
+  // Pictures from Gemini are PAID (no free tier).
+  GEMINI_IMAGE_MODEL: z.string().min(1).default("gemini-2.5-flash-image"),
+  GEMINI_CALL_TIMEOUT_MS: z.coerce.number().int().min(100).default(50_000),
+
+  // ---- Cloudflare Workers AI (optional: … = cloudflare) ----
+  // Your Cloudflare account id, and an API token with ONLY the "Workers AI" permission.
+  // Free daily allowance (10,000 neurons); made-up test children only. Secrets: .env only.
+  CLOUDFLARE_ACCOUNT_ID: unsetIfEmpty(z.string().min(10)),
+  CLOUDFLARE_API_TOKEN: unsetIfEmpty(z.string().min(10)),
+  CLOUDFLARE_BASE_URL: z.url().default("https://api.cloudflare.com/client/v4"),
+  CLOUDFLARE_TEXT_MODEL: z.string().min(1).default("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
+  CLOUDFLARE_TEXT_MAX_TOKENS: z.coerce.number().int().min(256).max(32_000).default(4096),
+  CLOUDFLARE_IMAGE_MODEL: z.string().min(1).default("@cf/black-forest-labs/flux-1-schnell"),
+  // More steps = a better picture but more of the free allowance (flux-1-schnell allows 1–8).
+  CLOUDFLARE_IMAGE_STEPS: z.coerce.number().int().min(1).max(8).default(4),
+  CLOUDFLARE_CALL_TIMEOUT_MS: z.coerce.number().int().min(100).default(50_000),
+  // The free Gemini / Cloudflare tiers may use what we send, so they are for made-up test
+  // children only. On a server (NODE_ENV=production, which staging also uses) they need this
+  // set to "true" on purpose, e.g. on a test server; never on the live site.
+  ALLOW_FREE_AI: z.enum(["true", "false"]).default("false"),
 
   // ---- Picture storage (BE-10) ----
   // The S3 bucket in the AWS UAE region. Set: pictures go to S3. Not set: a local folder
@@ -114,6 +159,14 @@ const envSchema = z.object({
   BACKUP_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(35),
   // While a paid hardback is still printing, the deletion waits and checks again this often.
   DELETION_PRINT_CHECK_MINUTES: z.coerce.number().min(0.001).max(24 * 60).default(60),
+
+  // ---- Book PDFs (BE-18) ----
+  // Which print profile (src/print/profiles.ts) makes the printer's file for a hardback, and
+  // which makes the PDF the parent downloads. A new publisher = a new profile + this setting.
+  PRINT_PROFILE: z.enum(PRINT_PROFILE_IDS).default("generic"),
+  DOWNLOAD_PROFILE: z.enum(PRINT_PROFILE_IDS).default("digital"),
+  // How long one PDF may take to make
+  BOOK_PDF_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600_000).default(120_000),
 })
   .refine((env) => env.NODE_ENV !== "production" || !!env.REDIS_URL, {
     path: ["REDIS_URL"],
@@ -123,9 +176,21 @@ const envSchema = z.object({
     path: ["S3_BUCKET"],
     message: "is required in production: pictures live in the UAE bucket (BE-10)",
   })
-  .refine((env) => env.AI_PROVIDER !== "fal" || !!env.FAL_KEY, {
+  .refine((env) => !usesService(env, "fal") || !!env.FAL_KEY, {
     path: ["FAL_KEY"],
-    message: 'is required when AI_PROVIDER is "fal"',
+    message: 'is required when "fal" makes the text or the pictures',
+  })
+  .refine((env) => !usesService(env, "gemini") || !!env.GEMINI_API_KEY, {
+    path: ["GEMINI_API_KEY"],
+    message: 'is required when "gemini" makes the text or the pictures',
+  })
+  .refine((env) => !usesService(env, "cloudflare") || (!!env.CLOUDFLARE_ACCOUNT_ID && !!env.CLOUDFLARE_API_TOKEN), {
+    path: ["CLOUDFLARE_API_TOKEN"],
+    message: 'CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required when "cloudflare" makes the text or the pictures',
+  })
+  .refine((env) => env.NODE_ENV !== "production" || env.ALLOW_FREE_AI === "true" || (!usesService(env, "gemini") && !usesService(env, "cloudflare")), {
+    path: ["AI_PROVIDER"],
+    message: "the free Gemini / Cloudflare services must not get real children's stories: on a server they need ALLOW_FREE_AI=true (test servers only)",
   })
   // Real money only in production: a live key anywhere else is a mistake.
   .refine((env) => env.NODE_ENV === "production" || !env.STRIPE_SECRET_KEY?.includes("_live_"), {
@@ -154,8 +219,29 @@ export const config = {
   consentTextVersion: parsed.data.CONSENT_TEXT_VERSION,
   trustProxyHops: parsed.data.TRUST_PROXY_HOPS,
   redisUrl: parsed.data.REDIS_URL ?? null,
-  aiProvider: parsed.data.AI_PROVIDER,
+  aiProvider: parsed.data.AI_PROVIDER as ProviderKind,
+  // null = the same as aiProvider.
+  aiTextProvider: (parsed.data.AI_TEXT_PROVIDER ?? null) as ProviderKind | null,
+  aiImageProvider: (parsed.data.AI_IMAGE_PROVIDER ?? null) as ProviderKind | null,
   stubDelayMs: parsed.data.STUB_DELAY_MS,
+  gemini: {
+    key: parsed.data.GEMINI_API_KEY ?? null,
+    baseUrl: parsed.data.GEMINI_BASE_URL.replace(/\/$/, ""),
+    textModel: parsed.data.GEMINI_TEXT_MODEL,
+    textBackupModels: parsed.data.GEMINI_TEXT_BACKUP_MODELS.split(",").map((m) => m.trim()).filter(Boolean),
+    imageModel: parsed.data.GEMINI_IMAGE_MODEL,
+    callTimeoutMs: parsed.data.GEMINI_CALL_TIMEOUT_MS,
+  },
+  cloudflare: {
+    accountId: parsed.data.CLOUDFLARE_ACCOUNT_ID ?? null,
+    token: parsed.data.CLOUDFLARE_API_TOKEN ?? null,
+    baseUrl: parsed.data.CLOUDFLARE_BASE_URL.replace(/\/$/, ""),
+    textModel: parsed.data.CLOUDFLARE_TEXT_MODEL,
+    maxTokens: parsed.data.CLOUDFLARE_TEXT_MAX_TOKENS,
+    imageModel: parsed.data.CLOUDFLARE_IMAGE_MODEL,
+    imageSteps: parsed.data.CLOUDFLARE_IMAGE_STEPS,
+    callTimeoutMs: parsed.data.CLOUDFLARE_CALL_TIMEOUT_MS,
+  },
   fal: {
     key: parsed.data.FAL_KEY ?? null,
     baseUrl: parsed.data.FAL_BASE_URL.replace(/\/$/, ""),
@@ -191,6 +277,11 @@ export const config = {
   deletion: {
     backupRetentionDays: parsed.data.BACKUP_RETENTION_DAYS,
     printCheckMs: Math.round(parsed.data.DELETION_PRINT_CHECK_MINUTES * 60_000),
+  },
+  print: {
+    printProfile: parsed.data.PRINT_PROFILE,
+    downloadProfile: parsed.data.DOWNLOAD_PROFILE,
+    timeoutMs: parsed.data.BOOK_PDF_TIMEOUT_MS,
   },
   review: {
     redrawsPerStory: parsed.data.REDRAWS_PER_STORY,

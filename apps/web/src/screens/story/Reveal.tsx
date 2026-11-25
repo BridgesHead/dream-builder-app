@@ -2,11 +2,9 @@ import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { CheckCircle2, Circle, ImageIcon, Loader2, Pencil, Sparkles, Wand2 } from "lucide-react";
 import { AppShell, CenteredCard } from "@/components/Layout";
-import { BookCover } from "@/components/BookCover";
 import { Flipbook } from "@/components/Flipbook";
 import { pageText } from "@/data/storyText";
 import { Arrow, Button, Card, Heading, LinkButton, Subtle } from "@/components/ui";
-import { heroAvatar } from "@/data/assets";
 import { inPreviewMode, useAppState } from "@/state/AppState";
 import { ApiError } from "@/lib/api";
 import {
@@ -211,26 +209,11 @@ export function GeneratingScreen() {
   );
 }
 
+// "Your story is ready": the real book, closed, with only an "Open My Story" button under it. Pressing it
+// turns the cover open, and the book's arrows, progress bar and buttons appear (the same screen
+// as /story/book from then on).
 export function ReadyScreen() {
-  const { story, mode, heroName } = useAppState();
-  return (
-    <AppShell>
-      <div className="my-auto flex flex-col items-center text-center">
-        <Heading>Your Story Is Ready</Heading>
-        <BookCover
-          className="mt-8"
-          title={`${possessive(heroName)} Magical Journey`}
-          author={story.authorName || "Author Name"}
-          edition={mode === "senior" ? "Creator" : "Explorer"}
-          asset="Cover art: hero portrait"
-          assetSrc={story.heroType ? heroAvatar(story.heroType) : undefined}
-        />
-        <LinkButton href={ROUTES.book} className="mt-8">
-          Open My Story <Arrow />
-        </LinkButton>
-      </div>
-    </AppShell>
-  );
+  return <StoryBook startClosed />;
 }
 
 const REDRAW_POLL_MS = 2000;
@@ -246,7 +229,13 @@ const firstSentence = (text: string) => text.trim().split(/(?<=[.!?])\s+/)[0] ??
 //   - "I'm Done!" sends the story to a parent (parent_review)
 // Preview mode (demo data, no login) keeps the old local-only book.
 export function BookScreen() {
+  return <StoryBook />;
+}
+
+function StoryBook({ startClosed = false }: { startClosed?: boolean }) {
   const [, navigate] = useLocation();
+  // The ready page shows the book closed until the child presses Ready.
+  const [opened, setOpened] = useState(!startClosed);
   const { story, updateStory, heroName, storyId } = useAppState();
   const demo = inPreviewMode() || !storyId;
   const [editing, setEditing] = useState(false);
@@ -390,14 +379,38 @@ export function BookScreen() {
     setSuggestion(null);
   };
 
-  const canRedraw = !demo && !locked && !editing && page !== null && !!serverPanel(page)?.imageUrl && redrawing === null;
+  // A comic (backend BE-11) is the same book with 4 comic squares on each page; its words are edited cell by cell later.
+  const comic = !!server && server.comicCells.length > 0;
+  const canRedraw = !comic && !demo && !locked && !editing && page !== null && !!serverPanel(page)?.imageUrl && redrawing === null;
+
+  // The last page's button, the same for the flipbook and the comic.
+  const endAction =
+    locked ? (
+      // Already sent to a parent (or approved): the next step is the parent's.
+      <Button
+        className="h-11 shrink-0 px-5"
+        onClick={() => {
+          updateStory({ confirmedByChild: true });
+          navigate(ROUTES.done);
+        }}
+      >
+        Ask a Parent to Continue <Arrow />
+      </Button>
+    ) : (
+      <Button className="h-11 shrink-0 px-5" disabled={busy !== null} onClick={() => void finish()}>
+        {busy === "submitting" ? "Sending…" : "I'm Done!"} <Arrow />
+      </Button>
+    );
 
   return (
     <AppShell>
       <div className="my-auto flex w-full flex-col items-center">
         <Heading className="text-center">Your Story Is Ready</Heading>
-        <Subtle className="mb-8 mt-1 text-center">Open the cover and turn the pages of {possessive(heroName)} adventure.</Subtle>
+        <Subtle className="mb-8 mt-1 text-center">
+          {opened ? <>Open the cover and turn the pages of {possessive(heroName)} adventure.</> : <>Open {possessive(heroName)} book to start reading.</>}
+        </Subtle>
         <Flipbook
+          comic={comic ? server.comicCells : null}
           textFor={textFor}
           editing={editing}
           onTextChange={(p, v) => setEdits((e) => ({ ...e, [p]: v }))}
@@ -410,27 +423,12 @@ export function BookScreen() {
           }}
           notes={notes}
           imageFor={(p) => serverPanel(p)?.imageUrl}
-          endAction={
-            locked ? (
-              // Already sent to a parent (or approved): the next step is the parent's.
-              <Button
-                className="h-11 shrink-0 px-5"
-                onClick={() => {
-                  updateStory({ confirmedByChild: true });
-                  navigate(ROUTES.done);
-                }}
-              >
-                Ask a Parent to Continue <Arrow />
-              </Button>
-            ) : (
-              <Button className="h-11 shrink-0 px-5" disabled={busy !== null} onClick={() => void finish()}>
-                {busy === "submitting" ? "Sending…" : "I'm Done!"} <Arrow />
-              </Button>
-            )
-          }
+          endAction={endAction}
+          openButton={startClosed ? "Open My Story" : undefined}
+          onOpen={() => setOpened(true)}
         />
 
-        {editing && creator && page !== null && (
+        {opened && editing && creator && page !== null && (
           <Card className="mt-6 w-full max-w-[880px] border-2 border-brand/20 p-5 sm:p-5">
             <label htmlFor="sentence" className="flex items-center gap-2 text-sm font-bold text-ink">
               <Wand2 className="h-4 w-4 text-brand" aria-hidden /> Sentence helper
@@ -464,33 +462,37 @@ export function BookScreen() {
           </Card>
         )}
 
-        <div className="mt-8 flex flex-wrap justify-center gap-3">
-          {!locked && (
-            <Button disabled={busy !== null} onClick={() => void toggleEditing()}>
-              <Pencil className="h-4 w-4" /> {busy === "saving" ? "Saving…" : editing ? "Save Changes" : "Edit My Story"}
-            </Button>
-          )}
-          {canRedraw && (
-            <Button variant="outline" className="border-ink/10 shadow-sm" onClick={() => void newPicture()}>
-              <ImageIcon className="h-4 w-4" aria-hidden /> New Picture for This Page
-            </Button>
-          )}
-        </div>
-        {(problem || redrawNote) && (
-          <p role="status" aria-live="polite" className="mt-3 max-w-md text-center text-xs font-semibold text-amber-700">
-            {redrawing !== null && <Loader2 className="mr-1 inline h-3 w-3 animate-spin" aria-hidden />}
-            {problem ?? redrawNote}
-          </p>
+        {opened && (
+          <>
+            <div className="mt-8 flex flex-wrap justify-center gap-3">
+              {!locked && !comic && (
+                <Button disabled={busy !== null} onClick={() => void toggleEditing()}>
+                  <Pencil className="h-4 w-4" /> {busy === "saving" ? "Saving…" : editing ? "Save Changes" : "Edit My Story"}
+                </Button>
+              )}
+              {canRedraw && (
+                <Button variant="outline" className="border-ink/10 shadow-sm" onClick={() => void newPicture()}>
+                  <ImageIcon className="h-4 w-4" aria-hidden /> New Picture for This Page
+                </Button>
+              )}
+            </div>
+            {(problem || redrawNote) && (
+              <p role="status" aria-live="polite" className="mt-3 max-w-md text-center text-xs font-semibold text-amber-700">
+                {redrawing !== null && <Loader2 className="mr-1 inline h-3 w-3 animate-spin" aria-hidden />}
+                {problem ?? redrawNote}
+              </p>
+            )}
+            <Subtle className="mt-3 text-center text-xs">
+              {locked
+                ? "A grown-up is looking at your story now."
+                : editing && at.part === null
+                  ? "Turn to a story page to change its words."
+                  : at.atEnd
+                    ? "Tap “I'm Done!” when your story is finished."
+                    : "Read to the last page and tap “I'm Done!” when your story is finished."}
+            </Subtle>
+          </>
         )}
-        <Subtle className="mt-3 text-center text-xs">
-          {locked
-            ? "A grown-up is looking at your story now."
-            : editing && at.part === null
-              ? "Turn to a story page to change its words."
-              : at.atEnd
-                ? "Tap “I'm Done!” when your story is finished."
-                : "Read to the last page and tap “I'm Done!” when your story is finished."}
-        </Subtle>
       </div>
     </AppShell>
   );

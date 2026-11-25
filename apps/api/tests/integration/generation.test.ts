@@ -139,7 +139,7 @@ describe(`generation (${queueKind()} queue)`, () => {
     expect(await statusOf(id)).toBe("generating");
     const shown = (await status(child, id)).body.status;
     expect(shown.canRetry).toBe(true);
-    expect(shown.failed).toEqual([{ type: "panel_image", panelNumber: 5, error: job.error }]);
+    expect(shown.failed).toEqual([{ type: "panel_image", panelNumber: 5, pageNumber: null, cellNumber: null, error: job.error }]);
     expect(shown.panels[4].imageStatus).toBe("failed");
     expect(shown.progress).toBeLessThan(100);
 

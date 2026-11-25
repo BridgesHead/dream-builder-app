@@ -10,7 +10,7 @@ export { AuditLog, ACTOR_ROLES } from "./auditLog.js";
 export { Session } from "./session.js";
 export { EmailLink, EMAIL_LINK_PURPOSES, type EmailLinkPurpose } from "./emailLink.js";
 export { FacilitatorLink } from "./facilitatorLink.js";
-export { Order, ORDER_TIERS, PAYMENT_STATUSES, PRINT_STATUSES, EMIRATES, type OrderTier, type PaymentStatus, type PrintStatus } from "./order.js";
+export { Order, ORDER_TIERS, PAYMENT_STATUSES, PRINT_STATUSES, PDF_STATUSES, EMIRATES, type OrderTier, type PaymentStatus, type PrintStatus, type PdfStatus } from "./order.js";
 export { StripeEvent } from "./stripeEvent.js";
 export { DeletionRequest, DELETION_STATUSES, type DeletionStatus } from "./deletionRequest.js";
 

@@ -56,13 +56,17 @@ export async function listStories(actor: StoryActor, onlyChildId?: string) {
 }
 
 // GET /stories/:id: every field, so a reopened draft restores everything (defect 1).
-// Each panel with a picture also gets imageUrl: a short-lived signed link to it (BE-10).
+// Each panel with a picture also gets imageUrl: a short-lived signed link to it (BE-10), and so
+// does each comic cell (BE-11).
 export async function getStory(actor: StoryActor, storyId: string) {
-  const story = (await findReachableStory(actor, storyId)).toJSON() as { panels: { imageKey?: string | null }[] };
+  const story = (await findReachableStory(actor, storyId)).toJSON() as {
+    panels: { imageKey?: string | null }[];
+    comicCells: { imageKey?: string | null }[];
+  };
   const storage = getStorage();
-  story.panels = await Promise.all(
-    story.panels.map(async (p) => ({ ...p, imageUrl: p.imageKey ? (await storage.link(p.imageKey)).url : null })),
-  );
+  const withLink = async <T extends { imageKey?: string | null }>(x: T) => ({ ...x, imageUrl: x.imageKey ? (await storage.link(x.imageKey)).url : null });
+  story.panels = await Promise.all(story.panels.map(withLink));
+  story.comicCells = await Promise.all((story.comicCells ?? []).map(withLink));
   return story;
 }
 

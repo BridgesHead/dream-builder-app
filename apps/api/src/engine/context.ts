@@ -20,6 +20,8 @@ export interface StoryAnswers {
   storyPath: StoryPath;
   mode: Mode;
   heroType: string | null;
+  /** The look the child picked ("soft-peaceful", "clear-bold", "indie-graphic-novel"), or null. */
+  comicVibe?: string | null;
   charName: string;
   heroPronoun: string | null;
   charTools: string[];

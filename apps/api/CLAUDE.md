@@ -84,4 +84,10 @@ docs/                 the guide, data model note, setup notes
 - `facesChallenge3`: `null` means not decided yet, and `false` means the child skipped the Challenge Gate.
 - Panels: 12 for two_act, 15 for three_act. Images are AI-generated and stored in our bucket, never fal.ai links.
 
+## AI services
+- fal.ai is the planned provider. Gemini and Cloudflare Workers AI were added as free options for local testing
+  (`AI_TEXT_PROVIDER` / `AI_IMAGE_PROVIDER`; README "Free AI for testing"). Free tiers: made-up test children only.
+- Every AI request goes through `src/ai/gate.ts` (anonymising gate, BE-14). Only gate.ts may send; only
+  `realProvider.ts` imports the client files. `tests/unit/falGate.test.ts` enforces this.
+
 

@@ -644,6 +644,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/orders/{id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A MongoDB id. A bad or unknown id answers 404. */
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A short-lived link to the book PDF (BE-18), for the parent who paid only
+         * @description 404 for anyone else's order. 409 NOT_PAID before payment, 409 PDF_NOT_READY while the
+         *     PDF is still being made (the order's pdfStatus says when it is "ready").
+         */
+        get: operations["downloadOrderPdf"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/payments/stripe/webhook": {
         parameters: {
             query?: never;
@@ -898,6 +922,10 @@ export interface components {
             childId: string;
             title: string | null;
             status: components["schemas"]["StoryStatus"];
+            /** @description fox, robot or knight (null until chosen): the dashboard names an untitled draft after the hero */
+            heroType: string | null;
+            /** @description The hero name the child typed (may be empty) */
+            charName: string;
             mode: components["schemas"]["Mode"];
             storyPath: components["schemas"]["StoryPath"] | null;
             /** Format: date-time */
@@ -921,6 +949,45 @@ export interface components {
             /** Format: date-time */
             storyGeneratedAt?: string | null;
             confirmedByChild?: boolean;
+            /** @description A comic's cells (BE-11), page by page; empty for a storybook. */
+            comicCells?: components["schemas"]["ComicCell"][];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * @description One comic panel (BE-11). 32 (8 pages × 4) for two acts, 40 (10 × 4) for three.
+         *     The picture has no words in it: the book draws the balloon, the sound effect and the
+         *     narration line. The 4 panels of a page share one layout (their arrangement on the page).
+         */
+        ComicCell: {
+            page: number;
+            cell: number;
+            /** @description The short picture-book line under the panel; "" for none (the picture tells it) */
+            caption: string;
+            /** @description What someone says or thinks */
+            dialogue: string | null;
+            /**
+             * @description The balloon: speech (oval), thought (cloud), whisper (dashed), shout (spiky)
+             * @enum {string}
+             */
+            bubbleType: "speech" | "thought" | "whisper" | "shout" | "none";
+            /** @description A sound effect drawn on the picture, e.g. "WHOOSH!" (at most one a page) */
+            sfx?: string | null;
+            /**
+             * @description The camera shot the picture was drawn with
+             * @enum {string|null}
+             */
+            shot?: "wide" | "medium" | "close" | "full" | null;
+            /**
+             * @description How the page's 4 panels are arranged (null: made before layouts, shown as grid)
+             * @enum {string|null}
+             */
+            layout?: "big_top" | "big_bottom" | "tall" | "grid" | null;
+            /** @description Tempo the musical squirrel's bubble: music notation only, e.g. ♪ ♫ */
+            tempo: string | null;
+            imageStatus: components["schemas"]["WorkStatus"];
+            /** @description A short-lived link to the cell's picture */
+            imageUrl?: string | null;
         } & {
             [key: string]: unknown;
         };
@@ -972,7 +1039,11 @@ export interface components {
         Picks4: string[];
         /** @enum {string} */
         WorkStatus: "queued" | "running" | "success" | "fallback" | "failed";
-        /** @description Overall progress plus text and picture status per panel (Final Climb, FE-06). */
+        /**
+         * @description Overall progress plus text and picture status per panel (Final Climb, FE-06). A comic
+         *     (BE-11) also has "cells": [{ number, page, cell, imageStatus }], and its progress counts
+         *     the cell pictures instead of panel pictures.
+         */
         StoryProgress: {
             [key: string]: unknown;
         };
@@ -1003,6 +1074,8 @@ export interface components {
             id: string;
             orderNumber: string;
             storyId: string;
+            /** @description The bought story's title (null if it has none, or the story was deleted) */
+            storyTitle?: string | null;
             tier: components["schemas"]["OrderTier"];
             /** @description The full price in AED */
             amount: number;
@@ -1017,6 +1090,11 @@ export interface components {
             /** @enum {string} */
             paymentStatus: "pending" | "paid" | "failed" | "cancelled";
             printStatus: string;
+            /**
+             * @description The book PDF (BE-18). The Download button works once it is "ready".
+             * @enum {string}
+             */
+            pdfStatus: "not_started" | "queued" | "making" | "ready" | "failed" | "deleted";
             deliveryAddress: components["schemas"]["DeliveryAddress"] | null;
             /** Format: date-time */
             paidAt: string | null;
@@ -2152,6 +2230,35 @@ export interface operations {
                 };
             };
             404: components["responses"]["Error"];
+        };
+    };
+    downloadOrderPdf: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A MongoDB id. A bad or unknown id answers 404. */
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The link; it stops working at expiresAt */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        url: string;
+                        /** Format: date-time */
+                        expiresAt: string;
+                    };
+                };
+            };
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     stripeWebhook: {
