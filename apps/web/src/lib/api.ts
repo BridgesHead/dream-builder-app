@@ -5,8 +5,8 @@
 // - Adds the /api/v1 prefix (Vite's dev proxy forwards /api to the backend).
 // - Sends and parses JSON.
 // - Sends the access token (kept in memory, never in localStorage) as "Authorization: Bearer ...".
-// - When there's no access token yet (a fresh page load) or it has expired, quietly gets a new
-//   one with the refresh cookie and tries the request once more.
+// - When the access token has expired, or isn't there yet because the page was just
+//   reloaded, quietly gets a new one with the refresh cookie and tries the request once more.
 // - Throws ApiError with the server's code and message when the response isn't ok.
 
 const BASE = "/api/v1";
@@ -80,8 +80,11 @@ async function toError(res: Response): Promise<ApiError> {
   return new ApiError(message, res.status, code, fields);
 }
 
-// If several requests find the token expired at once, they share ONE refresh call.
-let refreshing: Promise<boolean> | null = null;
+type RefreshResult = { kind: "parent"; user: unknown } | { kind: "child"; child: unknown } | null;
+
+// Everyone who needs a new token at the same moment (the app opening, and the first screen's
+// requests that went out before it had one) shares ONE refresh call.
+let refreshing: Promise<RefreshResult> | null = null;
 
 /**
  * Gets a new access token using the refresh cookie.
@@ -90,7 +93,12 @@ let refreshing: Promise<boolean> | null = null;
  * Throws ApiError if the server can't be reached or is broken, so a server outage is never
  * mistaken for "logged out".
  */
-export async function refreshAccessToken(): Promise<{ kind: "parent"; user: unknown } | { kind: "child"; child: unknown } | null> {
+export function refreshAccessToken(): Promise<RefreshResult> {
+  refreshing ??= refreshOnce().finally(() => (refreshing = null));
+  return refreshing;
+}
+
+async function refreshOnce(): Promise<RefreshResult> {
   const res = await send("/auth/refresh", { method: "POST" });
   if (res.status >= 500) throw await toError(res);
   if (!res.ok) {
@@ -103,20 +111,19 @@ export async function refreshAccessToken(): Promise<{ kind: "parent"; user: unkn
 }
 
 export async function api<T = unknown>(path: string, options: ApiOptions = {}): Promise<T> {
+  const hadToken = accessToken !== null;
   let res = await send(path, options);
 
-  // No access token yet, or it ran out: refresh once (with the refresh cookie), then try again.
-  // "No token yet" happens right after a full page load, e.g. coming back from Stripe's payment
-  // page: a screen can ask the API before the app has restored the session. (Not for the auth
-  // routes themselves, where a 401 means a wrong password or a dead session.)
+  // No token yet (the page was just reloaded: a screen can ask before the app has restored
+  // the session) or it ran out: refresh once, then try again. Not for the auth routes
+  // themselves, where a 401 means a wrong password or a dead session.
   if (res.status === 401 && !path.startsWith("/auth/")) {
     const expired = (await res.clone().json().catch(() => null))?.error?.code === "SESSION_EXPIRED";
-    if (!accessToken || expired) {
-      refreshing ??= refreshAccessToken()
+    if (!hadToken || expired) {
+      const stillLoggedIn = await refreshAccessToken()
         .then((r) => r !== null)
-        .catch(() => false)
-        .finally(() => (refreshing = null));
-      if (await refreshing) res = await send(path, options);
+        .catch(() => false);
+      if (stillLoggedIn) res = await send(path, options);
     }
   }
 

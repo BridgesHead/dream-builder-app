@@ -205,7 +205,9 @@ export function LoginScreen() {
       const user = await auth.login(email, password, remember);
       updateParent({ holder: "parent", account: { name: user.name, email: user.email, emailVerified: user.emailVerified } });
       // Returning parents land on the dashboard; new accounts go through child setup.
-      navigate(ROUTES.dashboard);
+      // Email not confirmed yet: everything else is refused until it is, so go where a new
+      // link can be sent (the first one may have expired, or never arrived).
+      navigate(user.emailVerified ? ROUTES.dashboard : ROUTES.verifyEmail);
     });
   };
 
@@ -239,7 +241,8 @@ export function LoginScreen() {
 
 /**
  * /verify-email?token=...  opened from the email: confirms the address.
- * /verify-email            right after sign-up: "check your inbox", with a resend button.
+ * /verify-email            right after sign-up, or logging in before confirming: "check your
+ *                          inbox", with a resend button.
  */
 export function VerifyEmailScreen() {
   const token = new URLSearchParams(useSearch()).get("token");
@@ -344,12 +347,13 @@ export function VerifyEmailScreen() {
     );
   }
 
-  // No token: just signed up.
+  // No token: just signed up, or logged in before confirming.
   return (
     <AuthFrame title="Check your inbox">
       <Notice>
         We've sent a link to <span className="font-bold">{parent.account?.email ?? "your email address"}</span>. Open it to confirm your
         email. You'll need to confirm it before adding your children's profiles. The link works once, for 24 hours.
+        {resendButton && " No email, or the link has expired? Ask for a new one below."}
       </Notice>
       {next}
       {resendButton}
