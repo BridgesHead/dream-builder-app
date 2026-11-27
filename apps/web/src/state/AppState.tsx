@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { HEROES, PRONOUNS, type ArtStyle, type HeroType, type PlanId, type Pronoun } from "@/data/content";
 import { ApiError } from "@/lib/api";
 import { restoreSession } from "@/lib/auth";
@@ -294,15 +295,21 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         await flushStory();
         const created = await createStory();
         pending.current = {};
-        setStoryId(created.id);
-        setStory(created.story);
+        // flushSync: the caller navigates right after this, and the route guard must already
+        // see the new story; otherwise it finds no story and sends the child back to the start.
+        flushSync(() => {
+          setStoryId(created.id);
+          setStory(created.story);
+        });
       },
       openStory: async (id) => {
         await flushStory();
         const loaded = await getStory(id);
         pending.current = {};
-        setStoryId(id);
-        setStory(loaded);
+        flushSync(() => {
+          setStoryId(id);
+          setStory(loaded);
+        });
       },
       clearStory: (childId = null) => {
         pending.current = {};
