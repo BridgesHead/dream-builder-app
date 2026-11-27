@@ -112,21 +112,61 @@ export interface StoryPanel {
   redrawStatus: WorkStatus | null;
 }
 
+/** One comic cell (backend BE-11): the picture has no words; the viewer draws them. */
+/** Balloon shapes, as in real comics: speech (oval), thought (cloud), whisper (dashed), shout (spiky). */
+export type ComicBubble = "speech" | "thought" | "whisper" | "shout" | "none";
+/** How a comic page's 4 panels are arranged (backend comicPlan.ts LAYOUTS). */
+export type ComicLayout = "big_top" | "big_bottom" | "tall" | "grid";
+const COMIC_BUBBLES: ComicBubble[] = ["speech", "thought", "whisper", "shout", "none"];
+const COMIC_LAYOUTS: ComicLayout[] = ["big_top", "big_bottom", "tall", "grid"];
+
+export interface ComicCellView {
+  page: number;
+  cell: number;
+  /** The short picture-book line under the panel ("" = none: the picture tells it). */
+  caption: string;
+  dialogue: string | null;
+  bubbleType: ComicBubble;
+  /** Tempo the musical squirrel: music notation only, e.g. "♪ ♫". */
+  tempo: string | null;
+  /** A sound effect drawn on the picture, e.g. "WHOOSH!". */
+  sfx: string | null;
+  /** The page's arrangement (the same on all 4 cells of a page). */
+  layout: ComicLayout;
+  imageUrl: string | null;
+}
+
 /** The made story: its status and pages (for the book and review screens). */
 export interface ReviewStory {
   status: StorySummary["status"];
   mode: Mode;
   title: string;
   panels: StoryPanel[];
+  /** A comic's cells, page by page (empty for a storybook). */
+  comicCells: ComicCellView[];
 }
 
 export async function getReviewStory(id: string): Promise<ReviewStory> {
-  const { story } = await api<{ story: ReviewStory & { panels: (StoryPanel & Record<string, unknown>)[] } }>(`/stories/${encodeURIComponent(id)}`);
+  const { story } = await api<{ story: ReviewStory & { panels: (StoryPanel & Record<string, unknown>)[]; comicCells?: (ComicCellView & Record<string, unknown>)[] } }>(`/stories/${encodeURIComponent(id)}`);
   return {
     status: story.status,
     mode: story.mode,
     title: story.title,
     panels: story.panels.map((p) => ({ number: p.number, text: p.text, imageUrl: p.imageUrl ?? null, redrawStatus: p.redrawStatus ?? null })),
+    comicCells: (story.comicCells ?? [])
+      .map((c) => ({
+        page: c.page,
+        cell: c.cell,
+        caption: c.caption ?? "",
+        dialogue: c.dialogue ?? null,
+        bubbleType: COMIC_BUBBLES.includes(c.bubbleType) ? c.bubbleType : "none",
+        tempo: c.tempo ?? null,
+        sfx: c.sfx ?? null,
+        // Comics made before the page layouts show as 4 equal panels.
+        layout: COMIC_LAYOUTS.includes(c.layout) ? c.layout : "grid",
+        imageUrl: c.imageUrl ?? null,
+      }))
+      .sort((a, b) => a.page - b.page || a.cell - b.cell),
   };
 }
 

@@ -36,6 +36,8 @@ export const AUDIT_ACTIONS = [
   // Orders (BE-17)
   "order.create", //   the parent started checkout
   "order.paid", //     Stripe confirmed the payment (the webhook)
+  "order.pdf_ready", // BE-18: the book PDF was made
+  "order.download", //  BE-18: the parent asked for the download link
   "user.create",
   "user.role_change",
   "facilitator.link",

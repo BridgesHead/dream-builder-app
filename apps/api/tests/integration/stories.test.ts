@@ -203,6 +203,8 @@ describe("who can reach which story", () => {
     const id = await newDraft(child);
     const all = await request(app).get("/api/v1/stories").set(bearer(parent.token));
     expect(all.body.stories.map((s: { id: string }) => s.id)).toEqual([id]);
+    // The dashboard names an untitled draft after its hero: both are in the list.
+    expect(all.body.stories[0]).toMatchObject({ heroType: null, charName: "" });
     const one = await request(app).get(`/api/v1/stories?childId=${childId}`).set(bearer(parent.token));
     expect(one.body.stories).toHaveLength(1);
     expect((await request(app).get(`/api/v1/stories/${id}`).set(bearer(parent.token))).status).toBe(200);

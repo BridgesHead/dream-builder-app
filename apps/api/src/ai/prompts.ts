@@ -1,4 +1,5 @@
 import { directStory } from "../engine/director.js";
+import { BUBBLE_WORDS, MAX_NARRATED_CELLS, NARRATION_WORDS, PANEL_SHAPES, shapeWords, SHOTS_FOR, type ComicPagePlan } from "../engine/comicPlan.js";
 import type { StoryContext } from "../engine/context.js";
 import type { PanelPlan } from "../engine/plan.js";
 import type { DraftPanel } from "../engine/types.js";
@@ -89,6 +90,61 @@ export function storyTextPrompt(ctx: PromptContext): Prompt {
       "The panels:",
       JSON.stringify(brief.panels.map(panelBrief), null, 2),
     ].join("\n\n"),
+  };
+}
+
+/**
+ * One comic page (BE-11): four panels from the page's story panels. The story text is already
+ * written and checked by the engine; this only re-tells it as a comic. The rules follow how
+ * real children's comics and picture books are made: the picture tells the story, very few
+ * words, one action per panel, shots that fit the panel's shape, a reason to turn the page.
+ */
+export function comicPagePrompt(ctx: PromptContext, page: ComicPagePlan, panels: { number: number; label: string; text: string }[], totalPages: number): Prompt {
+  const alias = aliasOf(ctx);
+  const hide = (s: string) => hideName(s, ctx.heroName, alias);
+  const words = ctx.heroWords[page.braveAct ?? 1];
+  const shapes = PANEL_SHAPES[page.layout];
+  const last = page.page === totalPages;
+  return {
+    system: [
+      "You are the writer of a premium comic picture book for children aged 8 to 14, in British English. Warm, gentle, funny and hopeful; never scary.",
+      "You turn one page of an existing story into exactly 4 comic panels, in story order. Keep the story's events; don't add new ones, don't skip any.",
+      "The rules of a great children's comic:",
+      "1. The PICTURE tells the story. Words never describe what the picture already shows.",
+      "2. Very few words. Most panels have NO narration at all: just the picture and a balloon.",
+      "3. One single action or moment per panel. Never two actions in one panel.",
+      "4. Balloons sound like a real child talking: short, natural, with feeling. Never explaining, never a speech, never naming the story's lessons.",
+      "5. Show feelings through faces, poses and actions in the pictures, not by saying them.",
+      "6. Vary the camera: wide views to show where we are, close-ups for feelings.",
+      "7. Never write story-structure words such as \"brave move\", \"pivot\", \"shadow\", \"act\", \"panel\", \"anchor\", \"gift\", or the names of the story's parts.",
+      JSON_ONLY,
+    ].join("\n"),
+    prompt: [
+      `Comic page ${page.page} of ${totalPages}. The hero is called ${alias}.`,
+      "What happens on this page (the story text):",
+      ...panels.map((p) => hide(p.text)),
+      "",
+      "The 4 panels' shapes on this page:",
+      ...shapes.map((s, i) => `Panel ${i + 1}: ${shapeWords(s)}; shot: ${SHOTS_FOR[s].map((x) => `"${x}"`).join(" or ")}.`),
+      page.page === 1 ? "Panel 1 opens the whole book: a wide view that shows the hero and where they are." : "Panel 1 shows where we are now, or what has changed.",
+      last
+        ? "Panel 4 is the very last panel of the book: a happy, calm ending."
+        : "Panel 4 ends on a small \"what happens next?\" moment that makes the reader want to turn the page.",
+      "",
+      "Each panel has:",
+      `- "caption": a picture-book narration line of at most ${NARRATION_WORDS} words, or "" (empty). Use it on at most ${MAX_NARRATED_CELLS} panels, only for what a picture cannot show: time passing ("The next morning…"), a new place, or a quiet feeling. Never a title or a label.`,
+      `- "dialogue": what someone says or thinks, at most ${BUBBLE_WORDS} words, or null. At least 2 panels on the page have dialogue. Usually the hero speaks; a friend or Tempo's music may answer.`,
+      '- "bubble": "speech" (said out loud), "thought" (a private worry, hope or idea), "whisper" (said softly), "shout" (excited or surprised, use rarely) or "none" (only when dialogue is null).',
+      '- "sfx": a sound effect drawn on the picture, ONE or TWO words in capitals, e.g. "WHOOSH!", "CLANG!", "BZZZ!", "DRIP… DROP", or null. At most one panel per page, only when something makes a sound.',
+      page.tempoAllowed
+        ? '- "tempo": Tempo, a small musical squirrel, may appear in ONE panel: music symbols only, e.g. "♪ ♫ ♪", never words. null in the other panels.'
+        : '- "tempo": always null on this page.',
+      '- "shot": one of the shots listed for that panel ("wide": the whole place; "medium": the hero from the waist up; "close": the hero\'s face; "full": the hero from head to toe).',
+      '- "scene": ONE sentence of at most 30 words for the illustrator: the single action, the hero\'s expression and pose, and the setting. Call the hero "the hero", never a name. Nothing written in the picture.',
+      ...(page.braveAct && words.trim() ? [`The hero's own brave words must be said out loud in one panel (speech), exactly: "${hide(words)}". Give that panel the strongest moment.`] : []),
+      "",
+      'The JSON shape: {"cells": [{"caption": "" or "...", "dialogue": "..." or null, "bubble": "speech", "sfx": null or "WHOOSH!", "tempo": null, "shot": "wide", "scene": "..."}, ×4]}',
+    ].join("\n"),
   };
 }
 

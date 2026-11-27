@@ -38,6 +38,16 @@ export async function startCheckout(input: {
   return api("/orders", { method: "POST", body: input });
 }
 
+/** Every order of the logged-in parent, newest first (all stories). */
+export async function listOrders(): Promise<ServerOrder[]> {
+  return (await api<{ orders: ServerOrder[] }>("/orders")).orders;
+}
+
 export async function getOrder(id: string): Promise<ServerOrder> {
   return (await api<{ order: ServerOrder }>(`/orders/${encodeURIComponent(id)}`)).order;
+}
+
+/** A short-lived link to the book PDF (backend BE-18). Works once the order's pdfStatus is "ready". */
+export async function getDownloadLink(id: string): Promise<{ url: string; expiresAt: string }> {
+  return api(`/orders/${encodeURIComponent(id)}/download`);
 }

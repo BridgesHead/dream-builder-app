@@ -114,7 +114,7 @@ describe("story panels and comic cells", () => {
   });
 
   it("refuses an unknown comic bubble type", async () => {
-    const story = new Story({ ...goodStory, comicCells: [{ page: 1, cell: 1, bubbleType: "shout" }] });
+    const story = new Story({ ...goodStory, comicCells: [{ page: 1, cell: 1, bubbleType: "yell" }] });
     expect(await invalidFields(story)).toContain("comicCells.0.bubbleType");
   });
 

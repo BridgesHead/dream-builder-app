@@ -1,5 +1,6 @@
 import { config } from "../config.js";
 import { buildContext, type DraftPanel, type StoryContext } from "../engine/index.js";
+import { splitPage } from "../engine/comicPlan.js";
 import { braveStepPhrase } from "../engine/context.js";
 import { BODY_SIGNALS, BRAVE_MOVE_WORDS, OBSTACLE_WORDS, STRENGTH_WORDS } from "../engine/tables.js";
 import type { AiProvider, AiResult } from "../jobs/providers.js";
@@ -16,7 +17,8 @@ import type { AiProvider, AiResult } from "../jobs/providers.js";
  *                                          missing (so the engine asks for a rewrite)
  *   badRewrites = 2                     → the next 2 sentence rewrites break the rules
  *                                          (two long sentences), so the rewriter asks again
- * Keys: "story_text", "title", "panel_image:<n>", "panel_redraw:<n>", "rewrite".
+ * Keys: "story_text", "title", "panel_image:<n>", "panel_redraw:<n>", "rewrite",
+ *       "comic_script:<page>", "comic_cell_image:<cell>".
  */
 export const stubControls = {
   failTimes: new Map<string, number>(),
@@ -142,6 +144,15 @@ export const stubProvider: AiProvider = {
   async panelImage(_story, panelNumber, _text, variant = 0) {
     // A redraw (BE-12) has its own key, so a test can fail a redraw on its own.
     await stubStep(`${variant > 0 ? "panel_redraw" : "panel_image"}:${panelNumber}`);
+    return stub({ body: new Uint8Array(PLACEHOLDER_PNG), contentType: "image/png", ext: "png" });
+  },
+  // A comic page: the page's sentences shared over 4 cells (the same as the real backup splitter).
+  async comicPage(story, page, panels) {
+    await stubStep(`comic_script:${page.page}`);
+    return stub(splitPage(panels.map((p) => p.text), page, buildContext(story).heroName));
+  },
+  async cellImage(_story, cellNumber) {
+    await stubStep(`comic_cell_image:${cellNumber}`);
     return stub({ body: new Uint8Array(PLACEHOLDER_PNG), contentType: "image/png", ext: "png" });
   },
   // A simple, rule-keeping rewrite: "Ember ran up the hill." → "Step by step, Ember ran up the hill."

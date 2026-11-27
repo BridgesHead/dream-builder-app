@@ -218,9 +218,11 @@ export function enqueueJob(jobId: string, key: string = jobId, options: { delayM
 
 /**
  * The jobs on the list are story jobs (a jobs-collection id) or, from BE-16, deletion jobs
- * ("deletion-<deletionRequest id>"). The worker sends each to the right runner (jobs/dispatch.ts).
+ * ("deletion-<deletionRequest id>"), and from BE-18 book PDFs ("bookpdf-<order id>"). The worker sends each to the right runner (jobs/dispatch.ts).
  */
 export const DELETION_JOB_PREFIX = "deletion-"; // BullMQ ids may not contain ":"
+/** Book PDF jobs (BE-18): "bookpdf-<order id>". */
+export const BOOK_PDF_JOB_PREFIX = "bookpdf-";
 
 /** Starts taking jobs from the list (the worker program, or the API itself in memory mode). */
 export function startWorker(processor: Processor, options?: WorkerOptions): RunningWorker {

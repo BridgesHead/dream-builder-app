@@ -1,17 +1,21 @@
 import type { FamilyDetails } from "../ai/anonymise.js";
-import type { SentRequest } from "../ai/falClient.js";
-import { falProvider } from "../ai/falProvider.js";
+import type { SentRequest } from "../ai/gate.js";
+import { realProvider } from "../ai/realProvider.js";
 import { stubProvider } from "../ai/stubProvider.js";
 import { config } from "../config.js";
+import type { ComicCellDraft, ComicPagePlan, Shot } from "../engine/comicPlan.js";
 import type { DraftPanel, StoryAnswers } from "../engine/index.js";
 
-// Who makes the words and pictures (guide BE-07, BE-10). Both providers have the same shape,
+// Who makes the words and pictures (guide BE-07, BE-10). Every provider has the same shape,
 // so the queue, the jobs and the story engine never care which one is running:
 //
-//   AI_PROVIDER=fal    the real AI (src/ai/falProvider.ts)
-//   AI_PROVIDER=stub   a fake AI for tests and PCs without a fal.ai key (src/ai/stubProvider.ts)
+//   AI_PROVIDER=stub                  a fake AI for tests and PCs without a key (src/ai/stubProvider.ts)
+//   AI_PROVIDER=fal                   fal.ai for text and pictures (the real AI)
+//   AI_PROVIDER=gemini | cloudflare   that service for both
 //
-// Every fal.ai call goes through the anonymising gate (BE-14, src/ai/falClient.ts).
+// AI_TEXT_PROVIDER and AI_IMAGE_PROVIDER, when set, pick each half on its own, e.g. the FREE
+// mix: AI_TEXT_PROVIDER=gemini + AI_IMAGE_PROVIDER=cloudflare (src/ai/realProvider.ts).
+// Every AI call goes through the anonymising gate (BE-14, src/ai/gate.ts).
 
 export { stubControls } from "../ai/stubProvider.js";
 
@@ -43,7 +47,7 @@ export interface RewriteRequest {
   reasons: string[];
 }
 
-/** A finished picture, ready to be saved in OUR storage (never a fal.ai link). */
+/** A finished picture, ready to be saved in OUR storage (never an AI service link). */
 export interface PanelPicture {
   body: Uint8Array;
   contentType: string;
@@ -66,6 +70,18 @@ export interface AiProvider {
    * The caller checks the answer against the rules (src/engine/rewriteCheck.ts) and asks again.
    */
   rewriteSentence(story: StoryForAi, input: RewriteSentenceInput): Promise<AiResult<string>>;
+  /** One comic page (BE-11): 4 cells re-telling the page's story panels. The job tidies them. */
+  comicPage(story: StoryForAi, page: ComicPagePlan, panels: ComicPanelText[], totalPages: number): Promise<AiResult<ComicCellDraft[]>>;
+  /** Draws one comic cell (1–40) from its scene. */
+  /** `shot`: the camera shot that fits the panel's shape (wide / medium / close / full). */
+  cellImage(story: StoryForAi, cellNumber: number, scene: string, withTempo: boolean, shot?: Shot | null): Promise<AiResult<PanelPicture>>;
+}
+
+/** A story panel as a comic page needs it. */
+export interface ComicPanelText {
+  number: number;
+  label: string;
+  text: string;
 }
 
 export interface RewriteSentenceInput {
@@ -80,10 +96,9 @@ export interface RewriteSentenceInput {
 }
 
 export function getProvider(): AiProvider {
-  switch (config.aiProvider) {
-    case "fal":
-      return falProvider;
-    case "stub":
-      return stubProvider;
-  }
+  // Read each time, so a test can switch providers by changing config.
+  const textKind = config.aiTextProvider ?? config.aiProvider;
+  const imageKind = config.aiImageProvider ?? config.aiProvider;
+  if (textKind === "stub" && imageKind === "stub") return stubProvider;
+  return realProvider(textKind, imageKind);
 }

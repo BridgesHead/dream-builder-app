@@ -70,6 +70,7 @@ async function forAi(story: Awaited<ReturnType<typeof findReachableStory>>): Pro
     heroType: story.heroType ?? null,
     charName: story.charName,
     heroPronoun: story.heroPronoun ?? null,
+    comicVibe: story.comicVibe ?? null,
     charTools: story.charTools,
     charStrengths: story.charStrengths,
     selfLove: story.selfLove,

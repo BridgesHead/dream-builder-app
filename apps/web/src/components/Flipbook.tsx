@@ -5,6 +5,8 @@ import { asset, feelingPose, heroArt, heroAvatar, movePose, strengthPose, toolPo
 import { pageQuote } from "@/data/storyText";
 import { useAppState, type StoryState } from "@/state/AppState";
 import { cx, possessive } from "@/lib/text";
+import type { ComicCellView, ComicLayout } from "@/lib/stories";
+import { ComicCell } from "./ComicCell";
 
 /*
  * A realistic flip-through storybook.
@@ -37,7 +39,48 @@ interface StoryPage {
   opener: boolean;
   blocks: Block[];
 }
-type Face = { kind: "cover" } | { kind: "endpaper"; back?: boolean } | { kind: "title" } | StoryPage | { kind: "end" } | { kind: "blank" };
+/**
+ * A comic book's page (BE-11), instead of a picture and text. On a computer a comic page of 4
+ * panels fills the open spread (part on the left page, part on the right); on a phone it fills
+ * one page. Either way in the page's arrangement (COMIC_LAYOUTS).
+ */
+interface ComicFace {
+  kind: "comic";
+  /** Printed page number. */
+  num: number;
+  /** The comic page these panels belong to. */
+  comicPage: number;
+  cells: ComicCellView[];
+  /** The grid for these panels, and each panel's place in it (Tailwind classes). */
+  grid: string;
+  spans: string[];
+}
+
+/**
+ * How a comic page's 4 panels sit, like a real comic (backend comicPlan.ts LAYOUTS, the same as
+ * the PDF): a big panel for the opening or the big moment, a tall one for action, or 4 equal.
+ * `spread`: the left page's panels and the right page's (a computer). `single`: one page (a phone).
+ */
+type Arrangement = { cells: number[]; grid: string; spans?: string[] };
+const COMIC_LAYOUTS: Record<ComicLayout, { spread: [Arrangement, Arrangement]; single: Arrangement }> = {
+  big_top: {
+    spread: [{ cells: [0], grid: "grid-rows-1" }, { cells: [1, 2, 3], grid: "grid-rows-3" }],
+    single: { cells: [0, 1, 2, 3], grid: "grid-cols-3 grid-rows-[1.25fr_1fr]", spans: ["col-span-3"] },
+  },
+  big_bottom: {
+    spread: [{ cells: [0, 1, 2], grid: "grid-rows-3" }, { cells: [3], grid: "grid-rows-1" }],
+    single: { cells: [0, 1, 2, 3], grid: "grid-cols-3 grid-rows-[1fr_1.25fr]", spans: ["", "", "", "col-span-3"] },
+  },
+  tall: {
+    spread: [{ cells: [0], grid: "grid-rows-1" }, { cells: [1, 2, 3], grid: "grid-cols-2 grid-rows-2", spans: ["col-span-2"] }],
+    single: { cells: [0, 1, 2, 3], grid: "grid-cols-[1.2fr_1fr_1fr] grid-rows-2", spans: ["row-span-2", "col-span-2"] },
+  },
+  grid: {
+    spread: [{ cells: [0, 1], grid: "grid-rows-2" }, { cells: [2, 3], grid: "grid-rows-2" }],
+    single: { cells: [0, 1, 2, 3], grid: "grid-cols-2 grid-rows-2" },
+  },
+};
+type Face = { kind: "cover" } | { kind: "endpaper"; back?: boolean } | { kind: "title" } | StoryPage | ComicFace | { kind: "end" } | { kind: "blank" };
 
 /** Covers and endpapers are glued to the board, so they are drawn board-size instead of paper-size. */
 const isBoard = (f: Face | null | undefined) => f?.kind === "cover" || f?.kind === "endpaper";
@@ -52,7 +95,8 @@ const C = {
   label: "mt-[0.9em] text-center text-[0.66em] font-extrabold uppercase tracking-[0.24em] text-amber-700",
   orn: "mb-[0.9em] mt-[0.45em]",
   p: "text-justify font-display text-[1.02em] leading-[1.7] text-ink [hyphens:auto]",
-  drop: "first-letter:float-left first-letter:mr-[0.1em] first-letter:mt-[0.06em] first-letter:font-bold first-letter:text-[3.2em] first-letter:leading-[0.82] first-letter:text-amber-800",
+  // No big first letter (drop cap) at the start of a page: Sami Bhai asked for plain text (2026-11-25).
+  drop: "",
   /** A paragraph that carries on overleaf: justify its last line too, like a printed book. */
   cont: "[text-align-last:justify]",
   quote: "mt-[0.9em] rounded-r-md border-l-[3px] border-amber-500 bg-amber-50/80 px-[0.8em] py-[0.5em] font-display text-[0.86em] italic leading-[1.5] text-amber-900",
@@ -293,7 +337,24 @@ function PaperFace({ face, side, ctx }: { face: Face; side: Side; ctx: FaceCtx }
   const { story } = ctx;
   let body: ReactNode = null;
 
-  if (face.kind === "story") {
+  if (face.kind === "comic") {
+    body = (
+      <div className={C.page}>
+        <p className={C.head}>{side === "left" ? ctx.title : `Comic page ${face.comicPage}`}</p>
+        {/* The panels fill the whole page, in the comic page's arrangement. */}
+        <div className={cx(C.content, "grid gap-[0.7em]", face.grid)}>
+          {face.cells.map((c, i) => (
+            <ComicCell key={`${c.page}-${c.cell}`} cell={c} heroType={story.heroType} className={face.spans[i]} />
+          ))}
+        </div>
+        <div className={C.foot}>
+          <span aria-hidden className="h-px w-[1.6em] bg-amber-400/60" />
+          {face.num}
+          <span aria-hidden className="h-px w-[1.6em] bg-amber-400/60" />
+        </div>
+      </div>
+    );
+  } else if (face.kind === "story") {
     const note = face.opener && ctx.notes?.[face.part]?.trim();
     body = (
       <div className={C.page}>
@@ -475,9 +536,18 @@ export interface FlipbookProps {
   endAction?: ReactNode;
   /** The server's picture for a story part (e.g. a signed link), or nothing for the sample art. */
   imageFor?: (part: number) => string | null | undefined;
+  /** A comic (BE-11): its cells, shown 4 to a page inside the same book, instead of the story pages. */
+  comic?: ComicCellView[] | null;
+  /**
+   * Starts as a closed book with only this one button under it (e.g. "Ready"): no arrows, no
+   * progress bar, no hints. Pressing it turns the cover open; then the usual controls appear.
+   */
+  openButton?: ReactNode;
+  /** Called once, when the closed book has been opened. */
+  onOpen?: () => void;
 }
 
-export function Flipbook({ textFor, editing = false, onTextChange, notes, onPositionChange, endAction, imageFor }: FlipbookProps) {
+export function Flipbook({ textFor, editing = false, onTextChange, notes, onPositionChange, endAction, imageFor, comic, openButton, onOpen }: FlipbookProps) {
   const { story, heroName, mode } = useAppState();
   const spreadMode = useMediaQuery("(min-width: 768px)");
   // Reduced motion (e.g. Windows "Animation effects" off) keeps every control working, with a quicker, softer turn.
@@ -487,6 +557,8 @@ export function Flipbook({ textFor, editing = false, onTextChange, notes, onPosi
   const [leaf, setLeafState] = useState<Leaf | null>(null);
   const leafRef = useRef<Leaf | null>(null);
   const [touched, setTouched] = useState(false);
+  // A book that starts closed (openButton): the controls stay hidden until its cover is open.
+  const [opened, setOpened] = useState(!openButton);
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const bookRef = useRef<HTMLDivElement>(null);
@@ -541,16 +613,26 @@ export function Flipbook({ textFor, editing = false, onTextChange, notes, onPosi
     setPages(paginate(box, JSON.parse(partsKey), imgClass));
   }, [partsKey, paperW, paperH, fontSize, imgClass, fontsReady]);
 
-  // ---- The book's faces, in reading order.
+  // ---- The book's faces, in reading order. A comic's pages take the place of the story pages.
+  const comicPages: ComicFace[] = [];
+  for (const n of [...new Set((comic ?? []).map((c) => c.page))].sort((a, b) => a - b)) {
+    const cells = comic!.filter((c) => c.page === n).sort((a, b) => a.cell - b.cell);
+    const layout = COMIC_LAYOUTS[cells[0]?.layout ?? "grid"] ?? COMIC_LAYOUTS.grid;
+    for (const part of spreadMode ? layout.spread : [layout.single]) {
+      const these = part.cells.map((i) => cells[i]).filter(Boolean);
+      comicPages.push({ kind: "comic", num: comicPages.length + 1, comicPage: n, cells: these, grid: part.grid, spans: part.cells.map((_, i) => part.spans?.[i] ?? "") });
+    }
+  }
+  const inner: (StoryPage | ComicFace)[] = comicPages.length ? comicPages : pages;
   const faces: Face[] = [];
   if (spreadMode) {
-    faces.push({ kind: "cover" }, { kind: "endpaper" }, { kind: "title" }, ...pages);
+    faces.push({ kind: "cover" }, { kind: "endpaper" }, { kind: "title" }, ...inner);
     // Finish on the inside back cover, which must be a right-hand page.
     if (faces.length % 2 === 0) faces.push({ kind: "end" }, { kind: "blank" });
     else faces.push({ kind: "end" });
     faces.push({ kind: "endpaper", back: true });
   } else {
-    faces.push({ kind: "cover" }, { kind: "title" }, ...pages, { kind: "end" });
+    faces.push({ kind: "cover" }, { kind: "title" }, ...inner, { kind: "end" });
   }
   const LAST = spreadMode ? (faces.length - 1) / 2 : faces.length - 1;
   const faceAt = (i: number): Face | null => faces[i] ?? null;
@@ -562,6 +644,13 @@ export function Flipbook({ textFor, editing = false, onTextChange, notes, onPosi
     if (pos > LAST) setPos(LAST);
   }, [LAST, pos]);
 
+  useEffect(() => {
+    if (pos > 0 && !opened) {
+      setOpened(true);
+      onOpen?.();
+    }
+  }, [pos, opened]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const firstPart = storyOn(pos)[0]?.part ?? null;
   useEffect(() => {
     onPositionChange?.({ part: firstPart, atEnd: pos === LAST });
@@ -571,6 +660,8 @@ export function Flipbook({ textFor, editing = false, onTextChange, notes, onPosi
     if (p === 0) return { label: "Cover", sub: "Tap the cover to open" };
     const shown = visible(p);
     const sp = storyOn(p);
+    const cp = [...new Set(shown.filter((f): f is ComicFace => f.kind === "comic").map((f) => f.comicPage))];
+    if (cp.length) return { label: `Comic page ${cp.join("–")} of ${new Set(comicPages.map((f) => f.comicPage)).size}` };
     if (sp.length) {
       const nums = sp.map((s) => s.num);
       const range = nums.length > 1 ? `Pages ${nums[0]}–${nums[nums.length - 1]}` : `Page ${nums[0]}`;
@@ -882,7 +973,7 @@ export function Flipbook({ textFor, editing = false, onTextChange, notes, onPosi
         )}
         {rightF && (
           <div className="absolute" style={slot(rightF, "right")}>
-            <FaceView face={rightF} side="right" ctx={ctx} showOpenHint={k === 0 && (!leaf || !!leaf.peek)} />
+            <FaceView face={rightF} side="right" ctx={ctx} showOpenHint={opened && k === 0 && (!leaf || !!leaf.peek)} />
           </div>
         )}
 
@@ -939,7 +1030,7 @@ export function Flipbook({ textFor, editing = false, onTextChange, notes, onPosi
         )}
         {current && (
           <div className="absolute" style={slot(current, "right")}>
-            <FaceView face={current} side="right" ctx={ctx} showOpenHint={pos === 0 && (!leaf || !!leaf.peek)} />
+            <FaceView face={current} side="right" ctx={ctx} showOpenHint={opened && pos === 0 && (!leaf || !!leaf.peek)} />
           </div>
         )}
         {leaf && current && !isBoard(current) && (
@@ -1005,44 +1096,59 @@ export function Flipbook({ textFor, editing = false, onTextChange, notes, onPosi
             {sub && pos > 0 ? `: ${sub}` : ""}
           </p>
 
-          <div className="mt-6 flex w-full items-center gap-3" style={{ maxWidth: Math.max(W, 300) }}>
-            <button type="button" className={navBtn} onClick={() => turn(-1)} disabled={pos === 0 || busy} aria-label="Previous page">
-              <ArrowLeft className="h-5 w-5" aria-hidden />
-            </button>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-baseline justify-between gap-3">
-                <span className="shrink-0 text-sm font-extrabold text-brand">{label}</span>
-                {sub && <span className="truncate text-xs font-semibold text-ink-muted">{sub}</span>}
-              </div>
-              <div className="mt-1 flex gap-[3px]" role="group" aria-label="Jump to page">
-                {Array.from({ length: LAST + 1 }, (_, i) => (
-                  <button
-                    key={i}
-                    type="button"
-                    onClick={() => jump(i)}
-                    aria-label={`Go to ${positionLabel(i).label}`}
-                    aria-current={i === pos ? "page" : undefined}
-                    className="group flex-1 py-1.5"
-                  >
-                    <span
-                      className={cx(
-                        "block h-1.5 rounded-full transition-colors",
-                        i === pos ? "bg-brand" : i < pos ? "bg-brand/45 group-hover:bg-brand/70" : "bg-brand/15 group-hover:bg-brand/35",
-                      )}
-                    />
-                  </button>
-                ))}
-              </div>
-            </div>
-            {pos === LAST && endAction ? (
-              endAction
-            ) : (
-              <button type="button" className={nextBtn} onClick={() => turn(1)} disabled={pos === LAST || busy} aria-label="Next page">
-                <ArrowRight className="h-5 w-5" aria-hidden />
+          {!opened ? (
+            // The closed book: only its one button. Pressing it turns the cover.
+            <div className="mt-8 flex justify-center">
+              <button
+                type="button"
+                onClick={() => turn(1)}
+                disabled={busy}
+                className="inline-flex h-12 items-center gap-2 rounded-full bg-brand px-8 text-base font-extrabold text-white shadow-[0_10px_24px_-10px_rgba(91,60,209,0.7)] transition hover:bg-brand-dark disabled:opacity-60"
+              >
+                {openButton}
               </button>
-            )}
-          </div>
-          {!touched && !editing && (
+            </div>
+          ) : (
+            <div className="mt-6 flex w-full items-center gap-3" style={{ maxWidth: Math.max(W, 300) }}>
+              <button type="button" className={navBtn} onClick={() => turn(-1)} disabled={pos === 0 || busy} aria-label="Previous page">
+                <ArrowLeft className="h-5 w-5" aria-hidden />
+              </button>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="shrink-0 text-sm font-extrabold text-brand">{label}</span>
+                  {sub && <span className="truncate text-xs font-semibold text-ink-muted">{sub}</span>}
+                </div>
+                <div className="mt-1 flex gap-[3px]" role="group" aria-label="Jump to page">
+                  {/* One tile per opening of the book; the cover has none. */}
+                {Array.from({ length: LAST }, (_, k) => k + 1).map((i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => jump(i)}
+                      aria-label={`Go to ${positionLabel(i).label}`}
+                      aria-current={i === pos ? "page" : undefined}
+                      className="group flex-1 py-1.5"
+                    >
+                      <span
+                        className={cx(
+                          "block h-1.5 rounded-full transition-colors",
+                          i === pos ? "bg-brand" : i < pos ? "bg-brand/45 group-hover:bg-brand/70" : "bg-brand/15 group-hover:bg-brand/35",
+                        )}
+                      />
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {pos === LAST && endAction ? (
+                endAction
+              ) : (
+                <button type="button" className={nextBtn} onClick={() => turn(1)} disabled={pos === LAST || busy} aria-label="Next page">
+                  <ArrowRight className="h-5 w-5" aria-hidden />
+                </button>
+              )}
+            </div>
+          )}
+          {opened && !touched && !editing && (
             <p className="mt-3 text-center text-xs text-ink-muted">
               {spreadMode ? "Hover a page to lift it, then click or drag it to turn. The ← → keys work too." : "Swipe or tap the page to turn it."}
             </p>

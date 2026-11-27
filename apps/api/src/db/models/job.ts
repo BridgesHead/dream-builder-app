@@ -37,6 +37,8 @@ const jobSchema = new Schema(
     // Which panel or comic cell the job is for, when it is for one.
     panelNumber: { type: Number, min: 1, max: 15, default: null },
     cellNumber: { type: Number, min: 1, max: 40, default: null },
+    // A comic script job (BE-11) writes one comic page (1–10).
+    pageNumber: { type: Number, min: 1, max: 10, default: null },
     // Each job records provider, model, duration and attempt count (guide BE-07).
     provider: { type: String, maxlength: 50, default: null },
     aiModel: { type: String, maxlength: 100, default: null }, // e.g. the FLUX model name ("model" is reserved by Mongoose)

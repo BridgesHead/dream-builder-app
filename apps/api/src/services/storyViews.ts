@@ -18,6 +18,8 @@ export function storySummary(story: {
   status: string;
   mode: string;
   storyPath?: string | null;
+  heroType?: string | null;
+  charName?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }) {
@@ -26,6 +28,9 @@ export function storySummary(story: {
     childId: String(story.childId),
     title: story.title ?? null,
     status: story.status,
+    // So a parent's dashboard can name an untitled draft ("Ember's story").
+    heroType: story.heroType ?? null,
+    charName: story.charName ?? "",
     mode: story.mode,
     storyPath: story.storyPath ?? null,
     createdAt: story.createdAt,

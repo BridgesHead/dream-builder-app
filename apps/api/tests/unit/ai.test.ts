@@ -88,6 +88,19 @@ describe("pictures (PRD F6)", () => {
     expect(robot).toContain("porthole eye");
     expect(robot).toContain("space helmet");
   });
+  it("the look the child picked changes the picture style (all three), toned for the mode", () => {
+    const look = (comicVibe: string, mode: "junior" | "senior" = "junior") => imagePrompt(buildContext({ ...EMBER_ANSWERS, comicVibe, mode }), "x");
+    expect(look("soft-peaceful")).toContain("gentle pastel colours");
+    expect(look("clear-bold")).toContain("bright saturated colours");
+    expect(look("indie-graphic-novel")).toContain("graphic novel");
+    expect(look("clear-bold")).toContain("ages 8 to 11");
+    expect(look("clear-bold", "senior")).toContain("ages 12 to 14");
+    // Three different looks, and none of them the old one-style-per-mode line.
+    expect(new Set(["soft-peaceful", "clear-bold", "indie-graphic-novel"].map((v) => look(v))).size).toBe(3);
+    expect(look("clear-bold")).not.toContain("watercolour sketch");
+    // Nothing picked (older drafts): the mode's default, as before.
+    expect(imagePrompt(buildContext({ ...EMBER_ANSWERS, comicVibe: null }), "x")).toContain("watercolour");
+  });
   it("the Scene Director chain: Visual Brief row, else Universal Triumph", () => {
     expect(sceneFallback("finale", zara)).toEqual({ text: expect.stringContaining("the clinic"), source: "visual_brief" });
     expect(sceneFallback("finale", zara, {})).toEqual({ text: UNIVERSAL_TRIUMPH, source: "universal_triumph" });
