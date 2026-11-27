@@ -3,6 +3,7 @@ import type { JobType } from "../db/models/job.js";
 import { enqueueJob } from "../jobs/queue.js";
 import { AppError } from "../lib/errors.js";
 import { logger } from "../lib/logger.js";
+import { COMIC_CELL_COUNT } from "../engine/comicPlan.js";
 import { PANEL_COUNT, type StoryPath, type WorkStatus } from "../types/story.js";
 import { auditStatus, changeStoryStatus, type StatusActor } from "./storyStatus.js";
 
@@ -11,6 +12,8 @@ import { auditStatus, changeStoryStatus, type StatusActor } from "./storyStatus.
 //
 //   POST /generate  → story draft → generating, jobs: story_text + title
 //   story_text done → one panel_image job per panel
+//                     (a comic, BE-11: one comic_script job per comic page instead,
+//                      and each page then one comic_cell_image job per cell)
 //   every job done  → story generating → child_review
 
 const DONE: WorkStatus[] = ["success", "fallback"];
@@ -19,9 +22,14 @@ const DONE: WorkStatus[] = ["success", "fallback"];
  * Makes sure one job exists for this story / type / panel, and is on the list if it's waiting.
  * Safe to call twice (a retried story_text job does): it never makes a second job.
  */
-export async function ensureJob(storyId: string, type: JobType, panelNumber: number | null = null): Promise<void> {
+export async function ensureJob(
+  storyId: string,
+  type: JobType,
+  panelNumber: number | null = null,
+  where: { pageNumber?: number; cellNumber?: number } = {},
+): Promise<void> {
   const job = await Job.findOneAndUpdate(
-    { storyId, type, panelNumber, cellNumber: null },
+    { storyId, type, panelNumber, cellNumber: where.cellNumber ?? null, pageNumber: where.pageNumber ?? null },
     { $setOnInsert: { status: "queued" } },
     { upsert: true, returnDocument: "after" },
   );
@@ -30,11 +38,16 @@ export async function ensureJob(storyId: string, type: JobType, panelNumber: num
 
 // Called after every finished job: if everything is done, the child can read the story.
 export async function finishIfDone(storyId: string): Promise<void> {
-  const story = await Story.findById(storyId, { status: 1, storyPath: 1, panels: 1 }).lean();
+  const story = await Story.findById(storyId, { status: 1, storyPath: 1, panels: 1, selectedFormat: 1, comicCells: 1 }).lean();
   if (!story || story.status !== "generating" || !story.storyPath) return;
-  const expected = PANEL_COUNT[story.storyPath as StoryPath];
+  const path = story.storyPath as StoryPath;
+  const expected = PANEL_COUNT[path];
+  const comic = story.selectedFormat === "comic";
+  // A comic has no panel pictures: its cells have them instead (BE-11).
   const panelsDone =
-    story.panels.length === expected && story.panels.every((p) => DONE.includes(p.textStatus) && DONE.includes(p.imageStatus));
+    story.panels.length === expected &&
+    story.panels.every((p) => DONE.includes(p.textStatus) && (comic || DONE.includes(p.imageStatus))) &&
+    (!comic || (story.comicCells.length === COMIC_CELL_COUNT[path] && story.comicCells.every((c) => DONE.includes(c.imageStatus))));
   const jobs = await Job.find({ storyId, type: { $ne: "panel_redraw" } }, { status: 1 }).lean();
   if (!panelsDone || jobs.some((j) => !DONE.includes(j.status))) return;
   // Only from "generating", so two jobs finishing together can't both do it (and only one
@@ -72,6 +85,11 @@ export async function retryFailed(storyId: string): Promise<number> {
     if (job.type === "panel_image") {
       await Story.updateOne({ _id: storyId, "panels.number": job.panelNumber }, { $set: { "panels.$.imageStatus": "queued" } });
     }
+    if (job.type === "comic_cell_image" && job.cellNumber) {
+      const page = Math.ceil(job.cellNumber / 4);
+      const cell = ((job.cellNumber - 1) % 4) + 1;
+      await Story.updateOne({ _id: storyId }, { $set: { "comicCells.$[c].imageStatus": "queued" } }, { arrayFilters: [{ "c.page": page, "c.cell": cell }] });
+    }
     // A new key, so the queue runs it again (the old key is already used up).
     await enqueueJob(String(job._id), `${String(job._id)}-retry-${job.attempts}`);
   }
@@ -100,7 +118,9 @@ type StoryLike = {
   _id: unknown;
   status: string;
   storyPath?: string | null;
+  selectedFormat?: string | null;
   panels: { number: number; textStatus: WorkStatus; imageStatus: WorkStatus; redrawStatus?: WorkStatus | null }[];
+  comicCells?: { page: number; cell: number; imageStatus: WorkStatus }[];
 };
 
 async function buildStatus(story: StoryLike) {
@@ -113,25 +133,38 @@ async function buildStatus(story: StoryLike) {
   const textJob = jobs.find((j) => j.type === "story_text");
 
   // Before the text exists there are no panels yet: show them waiting on the text job.
+  const comic = story.selectedFormat === "comic";
   const panels = Array.from({ length: expected }, (_, i) => {
     const saved = story.panels.find((p) => p.number === i + 1);
+    const textStatus = saved?.textStatus ?? textJob?.status ?? "queued";
     return {
       number: i + 1,
-      textStatus: saved?.textStatus ?? textJob?.status ?? "queued",
-      imageStatus: saved?.imageStatus ?? (textJob?.status === "failed" ? "failed" : "queued"),
+      textStatus,
+      // A comic draws its cells, not its panels (BE-11): a panel is done once its words are.
+      imageStatus: comic ? textStatus : (saved?.imageStatus ?? (textJob?.status === "failed" ? "failed" : "queued")),
     };
   });
 
-  // Progress: the text, the title and one unit per picture.
+  // A comic's cells (BE-11): each waits on its page's script job until the page is written.
+  const cellCount = comic && story.storyPath ? COMIC_CELL_COUNT[story.storyPath as StoryPath] : 0;
+  const cells = Array.from({ length: cellCount }, (_, i) => {
+    const page = Math.floor(i / 4) + 1;
+    const cell = (i % 4) + 1;
+    const saved = story.comicCells?.find((c) => c.page === page && c.cell === cell);
+    const script = jobs.find((j) => j.type === "comic_script" && j.pageNumber === page);
+    return { number: i + 1, page, cell, imageStatus: saved?.imageStatus ?? (script?.status === "failed" ? ("failed" as const) : ("queued" as const)) };
+  });
+
+  // Progress: the text, the title and one unit per picture (panels, or a comic's cells).
   const titleJob = jobs.find((j) => j.type === "title");
-  const units = [textJob?.status, titleJob?.status, ...panels.map((p) => p.imageStatus)];
+  const units = [textJob?.status, titleJob?.status, ...(comic ? cells.map((c) => c.imageStatus) : panels.map((p) => p.imageStatus))];
   const finished = story.status !== "draft" && story.status !== "generating";
   const done = units.filter((s) => s && DONE.includes(s)).length;
   const progress = finished ? 100 : units.length ? Math.floor((done / units.length) * 100) : 0;
 
   const failed = jobs
     .filter((j) => j.status === "failed")
-    .map((j) => ({ type: j.type, panelNumber: j.panelNumber ?? null, error: j.error ?? null }));
+    .map((j) => ({ type: j.type, panelNumber: j.panelNumber ?? null, pageNumber: j.pageNumber ?? null, cellNumber: j.cellNumber ?? null, error: j.error ?? null }));
 
   // Redraws (BE-12): the latest one per panel. A failed one kept the old picture; the child
   // can ask again (canRetry) while the story is still with them.
@@ -149,7 +182,7 @@ async function buildStatus(story: StoryLike) {
 
   return {
     jobs: allJobs,
-    payload: { storyId, status: story.status, progress, panels, failed, canRetry: story.status === "generating" && failed.length > 0, redraws },
+    payload: { storyId, status: story.status, progress, panels, cells, failed, canRetry: story.status === "generating" && failed.length > 0, redraws },
   };
 }
 
@@ -170,6 +203,8 @@ export async function adminProgress(storyId: string) {
       type: j.type,
       status: j.status,
       panelNumber: j.panelNumber ?? null,
+      pageNumber: j.pageNumber ?? null,
+      cellNumber: j.cellNumber ?? null,
       provider: j.provider ?? null,
       aiModel: j.aiModel ?? null,
       promptVersion: j.promptVersion ?? null,

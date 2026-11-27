@@ -14,6 +14,7 @@ import { objectIdString } from "../types/story.js";
 //   POST /          { storyId, tier, deliveryAddress? } → { order, checkoutUrl }
 //   GET  /          the caller's orders (?storyId=…)
 //   GET  /:id       one order (the success screen asks this until it says "paid")
+//   GET  /:id/download   a short-lived link to the book PDF (BE-18), paying parent only
 
 const addressSchema = z
   .object({
@@ -62,6 +63,11 @@ export function createOrdersRouter(): Router {
       throw new AppError(400, "VALIDATION_FAILED", "Some fields are missing or invalid", z.flattenError(query.error).fieldErrors);
     }
     res.json({ orders: await orders.listOrders(req.user!.id, query.data.storyId) });
+    return;
+  });
+
+  router.get("/:id/download", parentOnly, async (req, res) => {
+    res.json(await orders.downloadLink(buyerOf(req), String(req.params.id)));
     return;
   });
 

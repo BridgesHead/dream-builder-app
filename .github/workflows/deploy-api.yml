@@ -1,15 +1,18 @@
-# Deploy the API + worker to AWS (backend guide AWS-01 / AWS-02).
+# Deploy the app to AWS (backend guide AWS-01 / AWS-02): the API + worker, and the frontend.
 #
-#   merge to main        -> build the image once, deploy it to staging automatically
-#   push a tag v1.2.3    -> deploy THAT SAME image to production, after Sami approves
+#   merge to main        -> build the images once, deploy them to staging automatically
+#   push a tag v1.2.3    -> deploy THOSE SAME images to production, after Sami approves
 #                           (required reviewer on the GitHub "production" environment)
 #
-# Production never builds: it promotes the image staging already ran for that commit.
+# Production never builds: it promotes the images staging already ran for that commit.
 # Tag only commits that reached staging through main.
 #
-# The image (apps/api/Dockerfile) is built for linux/arm64 (Graviton) and pushed to ECR,
-# then the server is told through AWS Systems Manager to run /opt/dreambuilder/deploy.sh.
-# deploy.sh reads the settings from Parameter Store and rolls back if the API is unhealthy.
+# Two images per commit, both for linux/arm64 (Graviton), in the same ECR repository:
+#   <commit>       the API + worker (apps/api/Dockerfile)
+#   web-<commit>   the frontend, served at / on the same address as the API (apps/web/Dockerfile)
+# Then the server is told through AWS Systems Manager to run /opt/dreambuilder/deploy.sh.
+# deploy.sh reads the settings from Parameter Store and rolls back if the API is unhealthy
+# or the frontend does not start.
 # No AWS keys are stored in GitHub: each environment logs in with OIDC to its own role,
 # which can only deploy to its own server.
 #
@@ -24,6 +27,7 @@ on:
     tags: ["v*.*.*"]
     paths: # branch pushes only; tag pushes always run
       - "apps/api/**"
+      - "apps/web/**"
       - "packages/**"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -65,7 +69,7 @@ jobs:
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
-      - name: Build and push the image (linux/arm64)
+      - name: Build and push the API image (linux/arm64)
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -76,6 +80,18 @@ jobs:
           tags: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Build and push the frontend image (linux/arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          platforms: linux/arm64
+          push: true
+          provenance: false
+          tags: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:web-${{ github.sha }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
 
       - name: Deploy on the staging server
         env:
@@ -101,14 +117,16 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Check this commit's image exists (it ran on staging)
+      - name: Check this commit's images exist (they ran on staging)
         run: |
-          if ! aws ecr describe-images --repository-name "$ECR_REPOSITORY" \
-               --image-ids imageTag="$GITHUB_SHA" >/dev/null 2>&1; then
-            echo "::error::No image for ${GITHUB_SHA::7}. Tag a commit that was merged to main and deployed to staging."
-            exit 1
-          fi
-          echo "Promoting image ${GITHUB_SHA::7} (tag ${GITHUB_REF_NAME})"
+          for tag in "$GITHUB_SHA" "web-$GITHUB_SHA"; do
+            if ! aws ecr describe-images --repository-name "$ECR_REPOSITORY" \
+                 --image-ids imageTag="$tag" >/dev/null 2>&1; then
+              echo "::error::No image $tag. Tag a commit that was merged to main and deployed to staging."
+              exit 1
+            fi
+          done
+          echo "Promoting images for ${GITHUB_SHA::7} (tag ${GITHUB_REF_NAME})"
 
       - name: Deploy on the production server
         env:

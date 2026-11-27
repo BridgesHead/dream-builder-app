@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import { Job, Story } from "../db/models/index.js";
 import { config } from "../config.js";
 import { logger } from "../lib/logger.js";
-import { getStorage, panelImageKey, panelRedrawKey } from "../lib/storage.js";
+import { CELLS_PER_PAGE, cellIndex, cellPictureRatio, cellPosition, comicPlanFor, splitPage, tidyCells, type ComicLayout, type Shot } from "../engine/comicPlan.js";
+import { buildContext } from "../engine/index.js";
+import { comicCellKey, getStorage, panelImageKey, panelRedrawKey } from "../lib/storage.js";
 import { ensureJob, finishIfDone } from "../services/generation.js";
 import { PANEL_COUNT, type StoryPath, type StoryStatus } from "../types/story.js";
 import { familyDetailsFor } from "./privacy.js";
@@ -18,7 +20,21 @@ import type { Attempt } from "./queue.js";
 
 type JobDoc = NonNullable<Awaited<ReturnType<typeof Job.findOne>>>;
 /** The saved story, as much of it as the handlers read. */
-type StoryDoc = { panels: { number: number; text?: string | null; imageKey?: string | null; previousImageKeys?: string[] }[] };
+type StoryDoc = {
+  selectedFormat?: string | null;
+  panels: { number: number; text?: string | null; imageKey?: string | null; previousImageKeys?: string[] }[];
+  comicCells?: {
+    page: number;
+    cell: number;
+    scene?: string | null;
+    tempo?: string | null;
+    shot?: string | null;
+    dialogue?: string | null;
+    bubbleType?: string | null;
+    layout?: string | null;
+    imageKey?: string | null;
+  }[];
+};
 
 interface Handler {
   timeoutMs: () => number;
@@ -33,6 +49,13 @@ interface Handler {
 }
 
 const panelFilter = (job: JobDoc) => ({ _id: job.storyId, "panels.number": job.panelNumber });
+
+/** Shows a comic cell's picture as running / failed (BE-11). */
+async function setCellStatus(job: JobDoc, status: "running" | "failed"): Promise<void> {
+  if (!job.cellNumber) return;
+  const { page, cell } = cellPosition(job.cellNumber);
+  await Story.updateOne({ _id: job.storyId }, { $set: { "comicCells.$[c].imageStatus": status } }, { arrayFilters: [{ "c.page": page, "c.cell": cell }] });
+}
 
 const HANDLERS: Partial<Record<JobDoc["type"], Handler>> = {
   // Writes the text of every panel through the story engine (BE-09), then queues one
@@ -51,13 +74,89 @@ const HANDLERS: Partial<Record<JobDoc["type"], Handler>> = {
       await Job.updateOne({ _id: job._id }, { $set: { violations: result.violations } });
       const expected = PANEL_COUNT[story.storyPath];
       // A retry after the panels were saved must not wipe pictures already drawn.
-      const saved = await Story.findById(job.storyId, { panels: 1 }).lean();
+      const saved = await Story.findById(job.storyId, { panels: 1, selectedFormat: 1 }).lean();
       if (saved?.panels.length !== expected) {
         const panels = result.panels.map((p) => ({ number: p.number, text: p.text, textStatus: "success", imageStatus: "queued" }));
         await Story.updateOne({ _id: job.storyId }, { $set: { panels } });
       }
-      for (let n = 1; n <= expected; n += 1) await ensureJob(String(job.storyId), "panel_image", n);
+      if (saved?.selectedFormat === "comic") {
+        // A comic (BE-11): the pages are written from the checked story, then drawn cell by cell.
+        for (const page of comicPlanFor(story.storyPath)) await ensureJob(String(job.storyId), "comic_script", null, { pageNumber: page.page });
+      } else {
+        for (let n = 1; n <= expected; n += 1) await ensureJob(String(job.storyId), "panel_image", n);
+      }
       return result;
+    },
+  },
+
+  // One comic page (BE-11): 4 cells re-telling the page's story panels, then a picture job per
+  // cell. If the AI fails every try, the last try uses the backup splitter (a plain but complete
+  // page) instead of leaving the comic unfinished.
+  comic_script: {
+    timeoutMs: () => config.queue.textTimeoutMs,
+    async run(job, story, saved) {
+      const pages = comicPlanFor(story.storyPath);
+      const page = pages.find((p) => p.page === job.pageNumber);
+      if (!page) throw new Error(`Comic page ${job.pageNumber} isn't in this story's plan`);
+      const storyId = String(job.storyId);
+      const already = (saved.comicCells ?? []).filter((c) => c.page === page.page);
+      let result: Omit<AiResult<unknown>, "value"> = { provider: "backup", aiModel: "comic_splitter", fallback: true, fallbackUsed: "comic_splitter", promptVersion: null };
+
+      // A retry after the cells were saved keeps them (and any pictures already drawn).
+      if (already.length !== CELLS_PER_PAGE) {
+        const ctx = buildContext(story);
+        const panels = page.panels.map((n, i) => ({ number: n, label: page.labels[i], text: saved.panels.find((p) => p.number === n)?.text ?? "" }));
+        let drafts;
+        try {
+          const made = await getProvider().comicPage(story, page, panels, pages.length);
+          drafts = made.value;
+          result = made;
+        } catch (err) {
+          if (job.attempts < config.queue.attempts) throw err; // the queue tries again
+          logger.warn({ storyId, page: page.page, reason: reasonOf(err) }, "Comic page: the AI failed every try; using the backup splitter");
+          drafts = splitPage(panels.map((p) => p.text), page, ctx.heroName);
+        }
+        const braveWords = page.braveAct ? ctx.heroWords[page.braveAct] : "";
+        const cells = tidyCells(drafts, page, braveWords, "the hero").map((c, i) => ({ page: page.page, cell: i + 1, ...c, layout: page.layout, imageStatus: "queued" }));
+        await Story.updateOne({ _id: job.storyId }, { $pull: { comicCells: { page: page.page } } });
+        await Story.updateOne({ _id: job.storyId }, { $push: { comicCells: { $each: cells, $sort: { page: 1, cell: 1 } } } });
+      }
+      for (let c = 1; c <= CELLS_PER_PAGE; c += 1) await ensureJob(storyId, "comic_cell_image", null, { cellNumber: cellIndex(page.page, c) });
+      return result;
+    },
+  },
+
+  // One comic cell's picture (BE-11), like a panel picture: OUR storage, the same key on every try.
+  comic_cell_image: {
+    timeoutMs: () => config.queue.imageTimeoutMs,
+    async onStart(job) {
+      await setCellStatus(job, "running");
+    },
+    async run(job, story, saved) {
+      const n = job.cellNumber!;
+      const { page, cell } = cellPosition(n);
+      const found = saved.comicCells?.find((c) => c.page === page && c.cell === cell);
+      if (!found) throw new Error(`Comic cell ${n} hasn't been written yet`);
+      const result = await getProvider().cellImage(story, n, {
+        scene: found.scene || "the hero in the story",
+        withTempo: !!found.tempo,
+        shot: (found.shot as Shot | null) ?? null,
+        // A cell with a balloon gets calm space for it in the picture (the book draws it on top).
+        withBalloon: !!found.dialogue?.trim() && found.bubbleType !== "none",
+        // The picture is made in its panel's shape on the page.
+        ratio: cellPictureRatio(found.layout as ComicLayout | null, cell),
+      });
+      const key = comicCellKey(story.id, n, result.value.ext);
+      await getStorage().save(key, result.value.body, result.value.contentType);
+      await Story.updateOne(
+        { _id: job.storyId },
+        { $set: { "comicCells.$[c].imageKey": key, "comicCells.$[c].imageStatus": result.fallback ? "fallback" : "success" } },
+        { arrayFilters: [{ "c.page": page, "c.cell": cell }] },
+      );
+      return result;
+    },
+    async onFail(job) {
+      await setCellStatus(job, "failed");
     },
   },
 
@@ -127,7 +226,6 @@ const HANDLERS: Partial<Record<JobDoc["type"], Handler>> = {
       await Story.updateOne(panelFilter(job), { $set: { "panels.$.redrawStatus": "failed" } });
     },
   },
-  // comic_script and comic_cell_image arrive in BE-11.
 };
 
 /** The last requests that fit in AI_REQUESTS_MAX_CHARS (a story's text prompt is ~10–15 KB). */
@@ -198,6 +296,7 @@ export async function runJob(jobId: string, { attempt, isLastAttempt }: Attempt)
       heroType: story.heroType ?? null,
       charName: story.charName,
       heroPronoun: story.heroPronoun ?? null,
+      comicVibe: story.comicVibe ?? null,
       charTools: story.charTools,
       charStrengths: story.charStrengths,
       selfLove: story.selfLove,

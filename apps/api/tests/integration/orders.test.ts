@@ -273,6 +273,118 @@ describe("BE-17 the Stripe webhook", () => {
   });
 });
 
+describe("Promo codes (Stripe coupons)", () => {
+  /** What Stripe sends when a promo code took `discountFils` off this order's price. */
+  async function discountedSession(orderId: string, discountFils: number, promoId = "promo_test_20", overrides: Record<string, unknown> = {}) {
+    const base = await paidSession(orderId);
+    return {
+      ...base,
+      amount_total: base.amount_total - discountFils,
+      total_details: { amount_discount: discountFils, amount_shipping: 0, amount_tax: 0 },
+      discounts: [{ coupon: "coupon_test", promotion_code: promoId }],
+      ...overrides,
+    };
+  }
+
+  it("Stripe's page shows the promo code box", async () => {
+    const { parent, storyId } = await family();
+    await checkout(parent.token, { storyId, tier: "digital" });
+    expect(fakeStripe.sessions.at(-1)!.allowPromotionCodes).toBe(true);
+  });
+
+  it("a 20% code: the order is paid, with what was paid, the discount and the code", async () => {
+    const { parent, storyId } = await family();
+    fakeStripe.promotionCodes.promo_test_20 = "TEST20";
+    const id = (await checkout(parent.token, { storyId, tier: "hardback", deliveryAddress: ADDRESS })).body.order.id as string;
+    await webhook("checkout.session.completed", await discountedSession(id, 2980)).send(); // 20% of 149 AED
+
+    const order = await orderOf(id);
+    expect(order).toMatchObject({ paymentStatus: "paid", printStatus: "waiting", amountFils: 14900, amountPaidFils: 11920, discountFils: 2980, promoCode: "TEST20" });
+    const seen = await request(app).get(`/api/v1/orders/${id}`).set(bearer(parent.token));
+    expect(seen.body.order).toMatchObject({ amount: 149, amountPaid: 119.2, discount: 29.8, promoCode: "TEST20" });
+    // Stripe's own id for the code stays on our side.
+    expect(JSON.stringify(seen.body)).not.toMatch(/promo_test/);
+  });
+
+  it("a 100%-off code (Stripe says no_payment_required) counts as paid at 0 AED", async () => {
+    const { parent, storyId } = await family();
+    fakeStripe.promotionCodes.promo_free = "FREEBOOK";
+    const id = (await checkout(parent.token, { storyId, tier: "digital" })).body.order.id as string;
+    await webhook("checkout.session.completed", await discountedSession(id, 4900, "promo_free", { payment_status: "no_payment_required", payment_intent: null })).send();
+    expect(await orderOf(id)).toMatchObject({ paymentStatus: "paid", amountPaidFils: 0, discountFils: 4900, promoCode: "FREEBOOK" });
+    expect(await paidAudits(id)).toBe(1);
+  });
+
+  it("a full-price payment records no discount", async () => {
+    const { parent, storyId } = await family();
+    const id = (await checkout(parent.token, { storyId, tier: "digital" })).body.order.id as string;
+    await webhook("checkout.session.completed", await paidSession(id)).send();
+    expect(await orderOf(id)).toMatchObject({ paymentStatus: "paid", amountPaidFils: 4900, discountFils: 0, promoCode: null });
+  });
+
+  it("a lower amount without a real discount, or one that doesn't add up, is refused", async () => {
+    const { parent, storyId } = await family();
+    const id = (await checkout(parent.token, { storyId, tier: "digital" })).body.order.id as string;
+    // Says there was a discount, but no promo code is listed.
+    await webhook("checkout.session.completed", await discountedSession(id, 1000, "promo_x", { discounts: [] })).send();
+    // Paid + discount doesn't equal our price.
+    await webhook("checkout.session.completed", await discountedSession(id, 1000, "promo_x", { amount_total: 100 })).send();
+    expect((await orderOf(id)).paymentStatus).toBe("pending");
+  });
+
+  it("if the code's words can't be read, the order is still paid", async () => {
+    const { parent, storyId } = await family();
+    const id = (await checkout(parent.token, { storyId, tier: "digital" })).body.order.id as string;
+    await webhook("checkout.session.completed", await discountedSession(id, 490, "promo_unknown")).send();
+    expect(await orderOf(id)).toMatchObject({ paymentStatus: "paid", discountFils: 490, promoCode: null, stripePromotionCodeId: "promo_unknown" });
+  });
+});
+
+describe("BE-17 when the webhook never comes (the success screen asks Stripe itself)", () => {
+  const ask = (token: string, id: string) => request(app).get(`/api/v1/orders/${id}`).set(bearer(token));
+
+  it("a paid page with no webhook: the order becomes paid when the screen asks, once, with one audit entry", async () => {
+    const { parent, storyId } = await family();
+    const id = (await checkout(parent.token, { storyId, tier: "digital" })).body.order.id as string;
+    fakeStripe.sessions.at(-1)!.paid = true; // the parent paid on Stripe's page; no webhook arrives
+
+    const res = await ask(parent.token, id);
+    expect(res.status).toBe(200);
+    expect(res.body.order).toMatchObject({ paymentStatus: "paid", amountPaid: config.payments.prices.digital });
+    expect(await orderOf(id)).toMatchObject({ paymentStatus: "paid", stripePaymentIntentId: expect.stringMatching(/^pi_test_fake_/) });
+    expect(await paidAudits(id)).toBe(1);
+
+    // The webhook arriving late changes nothing (paid once, ever).
+    await webhook("checkout.session.completed", await paidSession(id)).send();
+    expect(await paidAudits(id)).toBe(1);
+  });
+
+  it("an unpaid page stays pending; Stripe is asked at most every few seconds per order", async () => {
+    const { parent, storyId } = await family();
+    const id = (await checkout(parent.token, { storyId, tier: "digital" })).body.order.id as string;
+    expect((await ask(parent.token, id)).body.order.paymentStatus).toBe("pending");
+    expect((await ask(parent.token, id)).body.order.paymentStatus).toBe("pending");
+    expect(fakeStripe.lookups).toBe(1);
+  });
+
+  it("if Stripe can't be asked, the screen still gets the order (pending), never an error", async () => {
+    const { parent, storyId } = await family();
+    const id = (await checkout(parent.token, { storyId, tier: "digital" })).body.order.id as string;
+    fakeStripe.sessions = []; // Stripe doesn't know the page: the lookup throws
+    const res = await ask(parent.token, id);
+    expect(res.status).toBe(200);
+    expect(res.body.order.paymentStatus).toBe("pending");
+  });
+
+  it("a paid order isn't looked up again", async () => {
+    const { parent, storyId } = await family();
+    const id = (await checkout(parent.token, { storyId, tier: "digital" })).body.order.id as string;
+    await webhook("checkout.session.completed", await paidSession(id)).send();
+    await ask(parent.token, id);
+    expect(fakeStripe.lookups).toBe(0);
+  });
+});
+
 describe("BE-17 privacy and access", () => {
   it("card details never reach us: only Stripe ids are stored", async () => {
     const { parent, storyId } = await family();

@@ -205,7 +205,9 @@ export function LoginScreen() {
       const user = await auth.login(email, password, remember);
       updateParent({ holder: "parent", account: { name: user.name, email: user.email, emailVerified: user.emailVerified } });
       // Returning parents land on the dashboard; new accounts go through child setup.
-      navigate(ROUTES.dashboard);
+      // Email not confirmed yet: everything else is refused until it is, so go where a new
+      // link can be sent (the first one may have expired, or never arrived).
+      navigate(user.emailVerified ? ROUTES.dashboard : ROUTES.verifyEmail);
     });
   };
 
@@ -239,7 +241,8 @@ export function LoginScreen() {
 
 /**
  * /verify-email?token=...  opened from the email: confirms the address.
- * /verify-email            right after sign-up: "check your inbox", with a resend button.
+ * /verify-email            right after sign-up, or logging in before confirming: "check your
+ *                          inbox", with a resend button.
  */
 export function VerifyEmailScreen() {
   const token = new URLSearchParams(useSearch()).get("token");
@@ -265,14 +268,42 @@ export function VerifyEmailScreen() {
   }, [token]);
 
   const loggedIn = !!parent.account;
-  const next = loggedIn ? (
+  // Demo data has no emailVerified at all: only an explicit false means "not confirmed yet".
+  const verified = parent.account?.emailVerified !== false;
+
+  // The parent often opens the email link in another tab, so this tab doesn't know yet.
+  // Ask the server; move on only if the email really is confirmed.
+  const [, navigate] = useLocation();
+  const check = useAction();
+  const [notYet, setNotYet] = useState(false);
+  const checkAgain = () =>
+    void check.run(async () => {
+      setNotYet(false);
+      const session = await auth.restoreSession();
+      if (session && session !== "offline" && session.kind === "parent" && session.user.emailVerified) {
+        if (parent.account) updateParent({ account: { ...parent.account, emailVerified: true } });
+        navigate(ROUTES.children);
+      } else {
+        setNotYet(true);
+      }
+    });
+
+  const next = !loggedIn ? (
+    <LinkButton href={ROUTES.login} className="w-full">
+      Log in <Arrow />
+    </LinkButton>
+  ) : verified ? (
     <LinkButton href={ROUTES.children} className="w-full">
       Continue to child profiles <Arrow />
     </LinkButton>
   ) : (
-    <LinkButton href={ROUTES.login} className="w-full">
-      Log in <Arrow />
-    </LinkButton>
+    <>
+      {notYet && <Notice>We haven't seen the confirmation yet. Please open the link in your email first.</Notice>}
+      <Button className="w-full" disabled={check.busy} onClick={checkAgain}>
+        {check.busy ? "Checking…" : "I've confirmed my email"} <Arrow />
+      </Button>
+      <ErrorNote error={check.error} />
+    </>
   );
   const resendButton = loggedIn && !parent.account?.emailVerified && (
     <Button
@@ -316,12 +347,13 @@ export function VerifyEmailScreen() {
     );
   }
 
-  // No token: just signed up.
+  // No token: just signed up, or logged in before confirming.
   return (
     <AuthFrame title="Check your inbox">
       <Notice>
         We've sent a link to <span className="font-bold">{parent.account?.email ?? "your email address"}</span>. Open it to confirm your
         email. You'll need to confirm it before adding your children's profiles. The link works once, for 24 hours.
+        {resendButton && " No email, or the link has expired? Ask for a new one below."}
       </Notice>
       {next}
       {resendButton}

@@ -41,6 +41,8 @@ export type ErrorCode =
   | "REWRITE_FAILED" // the AI couldn't give a sentence that keeps the rules; try again
   // BE-17 orders and Stripe
   | "ALREADY_BOUGHT" // this story was already bought in this format
+  | "NOT_PAID" // BE-18: the order isn't paid, so there is no PDF to download
+  | "PDF_NOT_READY" // BE-18: the book PDF is still being made
   | "PAYMENTS_NOT_READY" // Stripe isn't set up on this server, or couldn't be reached; try again
   | "WEBHOOK_INVALID" // a webhook without a valid Stripe signature
   // BE-16 data deletion

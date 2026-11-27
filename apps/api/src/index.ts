@@ -2,6 +2,7 @@ import { config } from "./config.js";
 import { createApp } from "./app.js";
 import { connectToDatabase, disconnectFromDatabase } from "./db/connect.js";
 import { closeQueue, queueKind, startWorker } from "./jobs/queue.js";
+import { recoverBookPdfs } from "./jobs/bookPdf.js";
 import { recoverDeletions } from "./jobs/deletionJob.js";
 import { processJob } from "./jobs/dispatch.js";
 import { logger } from "./lib/logger.js";
@@ -24,6 +25,7 @@ if (queueKind() === "memory") {
   startWorker(processJob);
   await recoverJobs();
   await recoverDeletions();
+  await recoverBookPdfs();
   logger.warn("No REDIS_URL: story jobs run inside the API (fine on your PC, not allowed in production)");
 }
 

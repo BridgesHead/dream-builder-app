@@ -112,7 +112,8 @@ export function ReviewScreen() {
       <div className="my-auto flex w-full flex-col items-center">
         <Heading className="text-center">Review Your Child's Story</Heading>
         <Subtle className="mb-8 mt-1 text-center">Turn the pages of {possessive(heroName)} adventure, just as it will be printed.</Subtle>
-        <Flipbook textFor={textFor} notes={shownNotes} imageFor={(p) => serverPanel(p)?.imageUrl} onPositionChange={(at) => setPage(at.part)} />
+        {/* A comic (backend BE-11) is the same book with 4 comic squares on each page; its notes are for the whole story. */}
+        <Flipbook textFor={textFor} notes={shownNotes} imageFor={(p) => serverPanel(p)?.imageUrl} comic={server?.comicCells} onPositionChange={(at) => setPage(at.part)} />
 
         {commenting && (
           <Card className="mt-6 w-full max-w-[880px] border-2 border-amber-200 p-5 sm:p-5">

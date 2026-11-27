@@ -72,6 +72,8 @@ export async function runDeletion(requestId: string, { isLastAttempt }: Attempt)
 
     // 3. Payment records are kept, without the delivery address.
     await Order.updateMany({ storyId: { $in: storyIds }, deliveryAddress: { $ne: null } }, { $set: { deliveryAddress: null } });
+    // The book PDFs went with the story folder in step 1 (BE-18): the orders stop pointing at them.
+    await Order.updateMany({ storyId: { $in: storyIds }, $or: [{ pdfKey: { $ne: null } }, { printFileKey: { $ne: null } }] }, { $set: { pdfKey: null, printFileKey: null, pdfStatus: "deleted" } });
     const ordersKept = await Order.countDocuments({ storyId: { $in: storyIds } });
 
     // 4. The child profile itself.

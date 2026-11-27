@@ -72,9 +72,17 @@ const comicCellSchema = new Schema(
     cell: { type: Number, required: true, min: 1, max: 4 },
     caption: answer(1000),
     dialogue: { type: String, trim: true, maxlength: 500, default: null },
-    bubbleType: { type: String, enum: ["thought", "speech", "none"], required: true, default: "none" },
+    bubbleType: { type: String, enum: ["speech", "thought", "whisper", "shout", "none"], required: true, default: "none" },
     // A Tempo bubble holds music notation only (BE-11 checks that rule).
     tempo: { type: String, maxlength: 100, default: null },
+    // A sound effect drawn on the picture, e.g. "WHOOSH!" (at most one a page).
+    sfx: { type: String, maxlength: 20, default: null },
+    // The camera shot (wide / medium / close / full), fitted to the panel's shape.
+    shot: { type: String, enum: ["wide", "medium", "close", "full", null], default: null },
+    // How the page's 4 panels are arranged (the same on all 4 cells of a page; see comicPlan.ts).
+    layout: { type: String, enum: ["big_top", "big_bottom", "tall", "grid", null], default: null },
+    // What the cell's picture shows ("the hero …", never a name): the picture prompt (BE-11).
+    scene: { type: String, trim: true, maxlength: 1000, default: "" },
     // Earlier caption + dialogue, oldest first (BE-12).
     previousVersions: { type: [cellVersionSchema], default: [] },
     imageKey,

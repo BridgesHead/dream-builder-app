@@ -21,6 +21,13 @@ export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
 export const PRINT_STATUSES = ["not_needed", "not_ready", "waiting", "file_ready", "sent", "printed", "shipped", "delivered", "problem"] as const;
 export type PrintStatus = (typeof PRINT_STATUSES)[number];
 
+// The book PDF (BE-18), made after payment for every order:
+//   not_started → queued → making → ready      (the Download button works)
+//                                  └─► failed  (admin can make it again: pnpm book-pdf <orderId>)
+//   deleted     the child's data was deleted (BE-16); the order record stays, the files don't
+export const PDF_STATUSES = ["not_started", "queued", "making", "ready", "failed", "deleted"] as const;
+export type PdfStatus = (typeof PDF_STATUSES)[number];
+
 // The 7 emirates, for the hardback delivery address.
 export const EMIRATES = ["Abu Dhabi", "Dubai", "Sharjah", "Ajman", "Umm Al Quwain", "Ras Al Khaimah", "Fujairah"] as const;
 
@@ -59,6 +66,29 @@ const orderSchema = new Schema(
     stripeSessionIds: { type: [{ type: String, maxlength: 255 }], default: [] },
     stripePaymentIntentId: { type: String, maxlength: 255, default: null },
     paidAt: { type: Date, default: null },
+    // Set when paid. A promo code typed on Stripe's page lowers what was paid:
+    // amountPaidFils + discountFils = amountFils. A 100%-off code pays 0.
+    amountPaidFils: { type: Number, min: 0, default: null },
+    discountFils: { type: Number, min: 0, default: 0 },
+    // The code the parent typed, e.g. "TEST20", and Stripe's id for it.
+    promoCode: { type: String, maxlength: 100, default: null },
+    stripePromotionCodeId: { type: String, maxlength: 255, default: null },
+
+    // ---- The book PDF (BE-18) ----
+    pdfStatus: { type: String, enum: PDF_STATUSES, required: true, default: "not_started" },
+    // The parent's download (every paid order), and the printer's file (hardback only), as
+    // keys in our storage (the UAE bucket). Never shown to the browser: the download route
+    // gives a short-lived link instead.
+    pdfKey: { type: String, maxlength: 300, default: null },
+    printFileKey: { type: String, maxlength: 300, default: null },
+    // Which print profile made the printer's file, and how many pages it has.
+    printProfile: { type: String, maxlength: 50, default: null },
+    pageCount: { type: Number, min: 0, default: null },
+    // e.g. "Panel 3: 1024×768 px prints at 137 dpi (the profile wants 300)". For admin.
+    pdfWarnings: { type: [{ type: String, maxlength: 300 }], default: [] },
+    pdfError: { type: String, maxlength: 500, default: null },
+    pdfAttempts: { type: Number, min: 0, default: 0 },
+    pdfReadyAt: { type: Date, default: null },
   },
   baseSchemaOptions,
 );

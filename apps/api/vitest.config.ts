@@ -18,15 +18,24 @@ export default defineConfig({
       // Fast background jobs in tests (BE-07). CI also sets REDIS_URL, so there the real
       // BullMQ queue is tested; on a PC without Redis the in-memory queue is.
       STUB_DELAY_MS: "5",
+      // Pinned, so a developer's .env (e.g. more tries for the free AI) never changes the tests.
+      JOB_ATTEMPTS: "3",
       JOB_BACKOFF_MS: "10",
       TEXT_JOB_TIMEOUT_MS: "2000",
       IMAGE_JOB_TIMEOUT_MS: "2000",
       // Pictures go to a throw-away folder, never your dev pictures (BE-10). Tests never use
       // the real fal.ai or S3: the fal tests start their own fake fal.ai server.
       AI_PROVIDER: "stub",
+      AI_TEXT_PROVIDER: "",
+      AI_IMAGE_PROVIDER: "",
       STORAGE_DIR: path.join(os.tmpdir(), "dream-builder-test-storage"),
       S3_BUCKET: "",
+      // No real AI keys in tests, even if your .env has them (the Gemini and Cloudflare tests
+      // start their own fake servers too).
       FAL_KEY: "",
+      GEMINI_API_KEY: "",
+      CLOUDFLARE_ACCOUNT_ID: "",
+      CLOUDFLARE_API_TOKEN: "",
       // Payments (BE-17): never the real Stripe in tests. No key = the fake Stripe; webhooks are
       // signed with this made-up secret by the tests themselves (Stripe's own test helper).
       STRIPE_SECRET_KEY: "",
