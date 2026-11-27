@@ -63,6 +63,12 @@ Any future expiry date, any CVC, any name.
 
 Watch the `stripe listen` terminal: `checkout.session.completed` should answer `[200]`.
 
+**Forgot `stripe listen`?** The payment still counts. When the parent lands on the success page,
+the server asks Stripe itself whether the order's payment page was paid (`syncWithStripe` in
+`src/services/orders.ts`) and marks it paid with the same checks as the webhook. The webhook is
+still needed for orders whose parent never comes back to the success page, and for failed or
+expired payments, so keep `stripe listen` running when you test payments.
+
 ## 4b. Promo codes (discounts)
 
 Codes are made in the Stripe dashboard, not in our code: **Product catalogue → Coupons → + Create coupon**,

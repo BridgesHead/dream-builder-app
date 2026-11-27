@@ -5,8 +5,8 @@
 // - Adds the /api/v1 prefix (Vite's dev proxy forwards /api to the backend).
 // - Sends and parses JSON.
 // - Sends the access token (kept in memory, never in localStorage) as "Authorization: Bearer ...".
-// - When the access token has expired, quietly gets a new one with the refresh cookie and
-//   tries the request once more.
+// - When there's no access token yet (a fresh page load) or it has expired, quietly gets a new
+//   one with the refresh cookie and tries the request once more.
 // - Throws ApiError with the server's code and message when the response isn't ok.
 
 const BASE = "/api/v1";
@@ -105,11 +105,13 @@ export async function refreshAccessToken(): Promise<{ kind: "parent"; user: unkn
 export async function api<T = unknown>(path: string, options: ApiOptions = {}): Promise<T> {
   let res = await send(path, options);
 
-  // The access token ran out: refresh once, then try again. (Not for the auth routes
-  // themselves, where a 401 means a wrong password or a dead session.)
-  if (res.status === 401 && accessToken && !path.startsWith("/auth/")) {
+  // No access token yet, or it ran out: refresh once (with the refresh cookie), then try again.
+  // "No token yet" happens right after a full page load, e.g. coming back from Stripe's payment
+  // page: a screen can ask the API before the app has restored the session. (Not for the auth
+  // routes themselves, where a 401 means a wrong password or a dead session.)
+  if (res.status === 401 && !path.startsWith("/auth/")) {
     const expired = (await res.clone().json().catch(() => null))?.error?.code === "SESSION_EXPIRED";
-    if (expired) {
+    if (!accessToken || expired) {
       refreshing ??= refreshAccessToken()
         .then((r) => r !== null)
         .catch(() => false)

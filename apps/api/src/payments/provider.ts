@@ -35,6 +35,11 @@ export interface PaymentProvider {
   expireCheckout(sessionId: string): Promise<void>;
   /** The words of a promo code ("TEST20") from Stripe's id for it ("promo_…"). */
   promotionCodeText(promotionCodeId: string): Promise<string | null>;
+  /**
+   * A Checkout page as Stripe sees it now (paid or not), the same object the webhook carries.
+   * For when the webhook is late or never comes (see orders.ts syncWithStripe).
+   */
+  retrieveCheckout(sessionId: string): Promise<Stripe.Checkout.Session>;
 }
 
 // ---- The real Stripe ----------------------------------------------------------------------
@@ -83,6 +88,10 @@ function stripeProvider(key: string): PaymentProvider {
     async promotionCodeText(promotionCodeId) {
       return (await stripeClient(key).promotionCodes.retrieve(promotionCodeId)).code;
     },
+    async retrieveCheckout(sessionId) {
+      // The promo code comes with it, so a discounted payment is recorded with its code.
+      return stripeClient(key).checkout.sessions.retrieve(sessionId, { expand: ["discounts.promotion_code"] });
+    },
   };
 }
 
@@ -90,14 +99,18 @@ function stripeProvider(key: string): PaymentProvider {
 
 /** What the fake was asked, so tests can check it (e.g. the amount sent). */
 export const fakeStripe = {
-  sessions: [] as (CheckoutRequest & { sessionId: string; expired: boolean })[],
+  /** `paid`: a test sets it to pretend the parent paid on that page (no webhook needed). */
+  sessions: [] as (CheckoutRequest & { sessionId: string; expired: boolean; paid?: boolean })[],
   failNext: false,
   /** Promo codes the fake knows: Stripe's id → the words the parent typed. */
   promotionCodes: {} as Record<string, string>,
+  /** How many times the server looked a page up (retrieveCheckout). */
+  lookups: 0,
   reset(): void {
     this.sessions = [];
     this.failNext = false;
     this.promotionCodes = {};
+    this.lookups = 0;
   },
 };
 
@@ -118,6 +131,25 @@ const fakeProvider: PaymentProvider = {
   },
   async promotionCodeText(promotionCodeId) {
     return fakeStripe.promotionCodes[promotionCodeId] ?? null;
+  },
+  async retrieveCheckout(sessionId) {
+    fakeStripe.lookups += 1;
+    const s = fakeStripe.sessions.find((x) => x.sessionId === sessionId);
+    if (!s) throw new Error(`No such checkout session: ${sessionId}`);
+    // Only the fields our code reads, shaped like Stripe's.
+    return {
+      id: s.sessionId,
+      object: "checkout.session",
+      status: s.paid ? "complete" : s.expired ? "expired" : "open",
+      payment_status: s.paid ? "paid" : "unpaid",
+      amount_total: s.amountFils,
+      currency: "aed",
+      metadata: { orderId: s.orderId, orderNumber: s.orderNumber },
+      client_reference_id: s.orderId,
+      payment_intent: s.paid ? `pi_test_fake_${s.sessionId.slice(-8)}` : null,
+      total_details: { amount_discount: 0, amount_shipping: 0, amount_tax: 0 },
+      discounts: [],
+    } as unknown as Stripe.Checkout.Session;
   },
 };
 

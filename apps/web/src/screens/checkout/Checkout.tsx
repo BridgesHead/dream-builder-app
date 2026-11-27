@@ -270,6 +270,8 @@ export function SuccessScreen() {
         const order = await getOrder(orderId);
         if (cancelled) return;
         setServer(order);
+        // An earlier try's problem (e.g. the server restarting) is over: don't keep showing it.
+        setProblem(null);
         if (order.paymentStatus !== "pending") {
           if (!told) {
             told = true;

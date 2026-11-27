@@ -16,6 +16,8 @@ import { findReachableStory } from "./stories.js";
 //   POST /orders     story approved and the caller's? → price from OUR config → order (pending)
 //                    → a Stripe Checkout page → the browser goes there
 //   the webhook      Stripe says "paid" → order paid (once, ever) → audit "order.paid"
+//   GET /orders/:id  still pending? → we ask Stripe ourselves (syncWithStripe) → the same "paid"
+//                    steps, in case the webhook is late or lost
 //                    → a hardback joins the print queue (printStatus "waiting", BE-18/19)
 //                    → the book PDF job starts (BE-18, jobs/bookPdf.ts)
 //   GET /orders/:id/download   the PDF is ready? → a short-lived link (paying parent only)
@@ -196,13 +198,61 @@ export async function startCheckout(buyer: ParentBuyer, input: { storyId: string
   return { order: orderView(order, story.title || null), checkoutUrl: checkout.url };
 }
 
-/** GET /orders/:id: one of the caller's orders (404 for anyone else's). */
+/**
+ * GET /orders/:id: one of the caller's orders (404 for anyone else's). While it's still pending,
+ * we also ask Stripe directly (syncWithStripe), so a late or lost webhook never leaves a paid
+ * parent waiting.
+ */
 export async function getOrder(parentId: string, orderId: string) {
   if (!isValidObjectId(orderId)) throw new AppError(404, "NOT_FOUND", "Order not found");
-  const order = await Order.findOne({ _id: orderId, parentId }).lean();
+  let order = await Order.findOne({ _id: orderId, parentId }).lean();
   if (!order) throw new AppError(404, "NOT_FOUND", "Order not found");
+  if (order.paymentStatus === "pending" && (await syncWithStripe(order))) {
+    order = (await Order.findById(order._id).lean()) ?? order;
+  }
   const story = await Story.findById(order.storyId, { title: 1 }).lean();
   return orderView(order, story?.title || null);
+}
+
+// The success screen asks every 2 seconds: Stripe is asked at most this often per order.
+const SYNC_EVERY_MS = 3000;
+const lastSync = new Map<string, number>();
+
+/**
+ * Stripe's own word on a pending order (Stripe recommends this next to the webhook): the
+ * webhook can be late, or never come (e.g. on a PC without `stripe listen`). Looks at the
+ * order's payment pages, newest first, and if one is paid, marks the order paid through the
+ * SAME checks the webhook uses (amount, currency, promo code; paid once, ever). Returns true
+ * if the order was just marked paid. A Stripe problem is logged, never shown to the parent:
+ * the webhook still counts.
+ */
+export async function syncWithStripe(order: { _id: unknown; stripeSessionIds?: string[] | null }): Promise<boolean> {
+  const id = String(order._id);
+  const now = Date.now();
+  if (now - (lastSync.get(id) ?? 0) < SYNC_EVERY_MS) return false;
+  lastSync.set(id, now);
+  // Keep the map small: forget orders not asked about for a minute.
+  for (const [key, at] of lastSync) if (now - at > 60_000) lastSync.delete(key);
+
+  try {
+    const provider = getPaymentProvider();
+    // Newest page first (the one the parent most likely paid on); at most the last 3.
+    for (const sessionId of [...(order.stripeSessionIds ?? [])].reverse().slice(0, 3)) {
+      const session = await provider.retrieveCheckout(sessionId);
+      if (session.payment_status === "paid" || session.payment_status === "no_payment_required") {
+        await markPaid(session, `sync-${session.id}`);
+        const fresh = await Order.findById(order._id, { paymentStatus: 1 }).lean();
+        if (fresh?.paymentStatus === "paid") {
+          logger.info({ orderId: id, sessionId }, "Order marked paid from Stripe directly (the webhook hadn't come)");
+          return true;
+        }
+        return false;
+      }
+    }
+  } catch (err) {
+    logger.warn({ orderId: id, reason: err instanceof Error ? err.message : String(err) }, "Could not check the order with Stripe; waiting for the webhook");
+  }
+  return false;
 }
 
 /**

@@ -340,6 +340,51 @@ describe("Promo codes (Stripe coupons)", () => {
   });
 });
 
+describe("BE-17 when the webhook never comes (the success screen asks Stripe itself)", () => {
+  const ask = (token: string, id: string) => request(app).get(`/api/v1/orders/${id}`).set(bearer(token));
+
+  it("a paid page with no webhook: the order becomes paid when the screen asks, once, with one audit entry", async () => {
+    const { parent, storyId } = await family();
+    const id = (await checkout(parent.token, { storyId, tier: "digital" })).body.order.id as string;
+    fakeStripe.sessions.at(-1)!.paid = true; // the parent paid on Stripe's page; no webhook arrives
+
+    const res = await ask(parent.token, id);
+    expect(res.status).toBe(200);
+    expect(res.body.order).toMatchObject({ paymentStatus: "paid", amountPaid: config.payments.prices.digital });
+    expect(await orderOf(id)).toMatchObject({ paymentStatus: "paid", stripePaymentIntentId: expect.stringMatching(/^pi_test_fake_/) });
+    expect(await paidAudits(id)).toBe(1);
+
+    // The webhook arriving late changes nothing (paid once, ever).
+    await webhook("checkout.session.completed", await paidSession(id)).send();
+    expect(await paidAudits(id)).toBe(1);
+  });
+
+  it("an unpaid page stays pending; Stripe is asked at most every few seconds per order", async () => {
+    const { parent, storyId } = await family();
+    const id = (await checkout(parent.token, { storyId, tier: "digital" })).body.order.id as string;
+    expect((await ask(parent.token, id)).body.order.paymentStatus).toBe("pending");
+    expect((await ask(parent.token, id)).body.order.paymentStatus).toBe("pending");
+    expect(fakeStripe.lookups).toBe(1);
+  });
+
+  it("if Stripe can't be asked, the screen still gets the order (pending), never an error", async () => {
+    const { parent, storyId } = await family();
+    const id = (await checkout(parent.token, { storyId, tier: "digital" })).body.order.id as string;
+    fakeStripe.sessions = []; // Stripe doesn't know the page: the lookup throws
+    const res = await ask(parent.token, id);
+    expect(res.status).toBe(200);
+    expect(res.body.order.paymentStatus).toBe("pending");
+  });
+
+  it("a paid order isn't looked up again", async () => {
+    const { parent, storyId } = await family();
+    const id = (await checkout(parent.token, { storyId, tier: "digital" })).body.order.id as string;
+    await webhook("checkout.session.completed", await paidSession(id)).send();
+    await ask(parent.token, id);
+    expect(fakeStripe.lookups).toBe(0);
+  });
+});
+
 describe("BE-17 privacy and access", () => {
   it("card details never reach us: only Stripe ids are stored", async () => {
     const { parent, storyId } = await family();
