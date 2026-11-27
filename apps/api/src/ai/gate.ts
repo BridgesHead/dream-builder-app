@@ -1,3 +1,4 @@
+import type { PictureSize } from "../engine/visual.js";
 import type { PanelPicture } from "../jobs/providers.js";
 import { IMAGE_TYPES } from "../lib/storage.js";
 import { anonymise, findLeaks, NO_FAMILY, type FamilyDetails } from "./anonymise.js";
@@ -54,11 +55,14 @@ export interface TextClient {
   askText(gate: AiGate, input: { system: string; prompt: string }): Promise<string>;
 }
 
-/** Something that draws one panel picture. */
+/**
+ * Something that draws one panel picture. `size` is the picture wanted, in the shape it's printed
+ * in (engine/visual.ts pictureSize); each service makes the nearest it can.
+ */
 export interface ImageClient {
   readonly name: string;
   readonly model: string;
-  drawImage(gate: AiGate, input: { prompt: string; seed: number }): Promise<PanelPicture>;
+  drawImage(gate: AiGate, input: { prompt: string; seed: number; size: PictureSize }): Promise<PanelPicture>;
 }
 
 /** A short, cleaned piece of an AI's reply, for an error message. */
@@ -77,6 +81,17 @@ export interface GatedRequest {
   /** Builds the body from the CLEANED texts (same keys). */
   body: (clean: Record<string, string>) => Record<string, unknown>;
   timeoutMs: number;
+  /** "form": sent as multipart form data (Cloudflare's FLUX.2 models want it); default JSON. */
+  format?: "json" | "form";
+}
+
+/** The request body: JSON, or form fields (each value as text). */
+function encode(body: Record<string, unknown>, format: GatedRequest["format"]): { body: string | FormData; headers: Record<string, string> } {
+  if (format !== "form") return { body: JSON.stringify(body), headers: { "Content-Type": "application/json" } };
+  const form = new FormData();
+  for (const [key, value] of Object.entries(body)) if (value !== undefined && value !== null) form.append(key, String(value));
+  // fetch sets the multipart Content-Type (with its boundary) itself.
+  return { body: form, headers: {} };
 }
 
 /** Cleans the texts, refuses to send a leak, then POSTs the JSON body with a time limit. */
@@ -91,10 +106,11 @@ export async function gatedPost<T>(gate: AiGate, req: GatedRequest): Promise<T> 
 
   let res: Response;
   try {
+    const encoded = encode(req.body(clean), req.format);
     res = await fetch(req.url, {
       method: "POST",
-      headers: { ...req.headers, "Content-Type": "application/json" },
-      body: JSON.stringify(req.body(clean)),
+      headers: { ...req.headers, ...encoded.headers },
+      body: encoded.body,
       signal: AbortSignal.timeout(req.timeoutMs),
     });
   } catch (err) {

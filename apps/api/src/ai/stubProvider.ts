@@ -151,7 +151,7 @@ export const stubProvider: AiProvider = {
     await stubStep(`comic_script:${page.page}`);
     return stub(splitPage(panels.map((p) => p.text), page, buildContext(story).heroName));
   },
-  async cellImage(_story, cellNumber) {
+  async cellImage(_story, cellNumber, _input) {
     await stubStep(`comic_cell_image:${cellNumber}`);
     return stub({ body: new Uint8Array(PLACEHOLDER_PNG), contentType: "image/png", ext: "png" });
   },

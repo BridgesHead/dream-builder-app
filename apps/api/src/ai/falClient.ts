@@ -1,4 +1,5 @@
 import { config } from "../config.js";
+import { scaleToFit, type PictureSize } from "../engine/visual.js";
 import type { PanelPicture } from "../jobs/providers.js";
 import { AiError, checkPicture, cleanDetail, gatedPost, type AiGate, type ImageClient, type TextClient } from "./gate.js";
 
@@ -39,12 +40,18 @@ export async function askText(gate: AiGate, input: { system: string; prompt: str
   return reply.output;
 }
 
-/** One FLUX picture. Returns fal.ai's TEMPORARY link: download it, never store it. */
-export async function drawImage(gate: AiGate, input: { prompt: string; seed: number }): Promise<string> {
+// FLUX.2 on fal.ai takes 512–2048 px a side; FLUX.1 more, but it is best at this size too.
+const FAL_MAX_SIDE = 2048;
+
+/**
+ * One FLUX picture, in the shape and size asked for (fal.ai takes an exact width and height).
+ * Returns fal.ai's TEMPORARY link: download it, never store it.
+ */
+export async function drawImage(gate: AiGate, input: { prompt: string; seed: number; size: PictureSize }): Promise<string> {
   const reply = await falPost<{ images?: { url?: unknown }[] }>(gate, config.fal.imageModel, { prompt: input.prompt }, (c) => ({
     prompt: c.prompt,
     seed: input.seed,
-    image_size: "landscape_4_3",
+    image_size: scaleToFit(input.size, FAL_MAX_SIDE),
     num_images: 1,
     enable_safety_checker: true,
   }));

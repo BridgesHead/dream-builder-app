@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Job, Story } from "../db/models/index.js";
 import { config } from "../config.js";
 import { logger } from "../lib/logger.js";
-import { CELLS_PER_PAGE, cellIndex, cellPosition, comicPlanFor, splitPage, tidyCells, type Shot } from "../engine/comicPlan.js";
+import { CELLS_PER_PAGE, cellIndex, cellPictureRatio, cellPosition, comicPlanFor, splitPage, tidyCells, type ComicLayout, type Shot } from "../engine/comicPlan.js";
 import { buildContext } from "../engine/index.js";
 import { comicCellKey, getStorage, panelImageKey, panelRedrawKey } from "../lib/storage.js";
 import { ensureJob, finishIfDone } from "../services/generation.js";
@@ -23,7 +23,17 @@ type JobDoc = NonNullable<Awaited<ReturnType<typeof Job.findOne>>>;
 type StoryDoc = {
   selectedFormat?: string | null;
   panels: { number: number; text?: string | null; imageKey?: string | null; previousImageKeys?: string[] }[];
-  comicCells?: { page: number; cell: number; scene?: string | null; tempo?: string | null; shot?: string | null; imageKey?: string | null }[];
+  comicCells?: {
+    page: number;
+    cell: number;
+    scene?: string | null;
+    tempo?: string | null;
+    shot?: string | null;
+    dialogue?: string | null;
+    bubbleType?: string | null;
+    layout?: string | null;
+    imageKey?: string | null;
+  }[];
 };
 
 interface Handler {
@@ -127,7 +137,15 @@ const HANDLERS: Partial<Record<JobDoc["type"], Handler>> = {
       const { page, cell } = cellPosition(n);
       const found = saved.comicCells?.find((c) => c.page === page && c.cell === cell);
       if (!found) throw new Error(`Comic cell ${n} hasn't been written yet`);
-      const result = await getProvider().cellImage(story, n, found.scene || "the hero in the story", !!found.tempo, (found.shot as Shot | null) ?? null);
+      const result = await getProvider().cellImage(story, n, {
+        scene: found.scene || "the hero in the story",
+        withTempo: !!found.tempo,
+        shot: (found.shot as Shot | null) ?? null,
+        // A cell with a balloon gets calm space for it in the picture (the book draws it on top).
+        withBalloon: !!found.dialogue?.trim() && found.bubbleType !== "none",
+        // The picture is made in its panel's shape on the page.
+        ratio: cellPictureRatio(found.layout as ComicLayout | null, cell),
+      });
       const key = comicCellKey(story.id, n, result.value.ext);
       await getStorage().save(key, result.value.body, result.value.contentType);
       await Story.updateOne(

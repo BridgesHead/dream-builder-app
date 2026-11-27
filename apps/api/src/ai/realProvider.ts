@@ -1,5 +1,6 @@
+import { config } from "../config.js";
 import { buildContext } from "../engine/index.js";
-import { comicCellPrompt, fallbackTitle, imagePrompt, sceneFallback, seedFor, type Scene } from "../engine/visual.js";
+import { comicCellPrompt, fallbackTitle, imagePrompt, pictureSize, sceneFallback, seedFor, STORY_PICTURE_RATIO, type Scene } from "../engine/visual.js";
 import { readComicCells } from "./comicJson.js";
 import type { AiProvider, AiResult, StoryForAi } from "../jobs/providers.js";
 import { logger } from "../lib/logger.js";
@@ -35,6 +36,9 @@ import { stubProvider } from "./stubProvider.js";
 //   title         "[HeroName] and the [Poetic Version of the Dream]"; formula if the AI's is off
 //   panelImage    Scene Director (the TEXT AI) → picture AI (fixed seed where it takes one) →
 //                 a picture for OUR storage. A redraw (BE-12) moves the seed on by its variant.
+//   cellImage     one comic panel's picture
+// Every picture is asked for in the shape it's printed in, IMAGE_LONG_SIDE px on its long side
+// (engine/visual.ts pictureSize); each service makes the nearest it can.
 //   rewriteSentence  one other way to say a sentence (Creator mode, BE-12)
 //
 // The story logic lives here once, whichever services run it. Every call goes through the
@@ -132,19 +136,24 @@ export function realProvider(textKind: ProviderKind, imageKind: ProviderKind): A
         const scene = await sceneFor(text, ctx, gate, panelNumber, panelText);
         // The story's own seed keeps the hero looking the same; a redraw nudges it for a new picture.
         const seed = (seedFor(ctx) + variant) % 2_147_483_647;
-        const picture = await image.drawImage(gate, { prompt: imagePrompt(ctx, scene.text), seed });
+        // In the book's picture shape (16:10), big enough to print.
+        const size = pictureSize(STORY_PICTURE_RATIO, config.images.longSide);
+        const picture = await image.drawImage(gate, { prompt: imagePrompt(ctx, scene.text), seed, size });
         return result(gate, image, picture, scene.source === "director" ? null : scene.source);
       }
     : (story, panelNumber, panelText, variant) => stubProvider.panelImage(story, panelNumber, panelText, variant);
 
   const cellImage: AiProvider["cellImage"] = image
-    ? async (story, cellNumber, scene, withTempo, shot) => {
+    ? async (story, cellNumber, input) => {
         const { ctx, gate } = prepare(story);
+        const prompt = comicCellPrompt(ctx, input.scene, input.withTempo, input.shot ?? null, input.withBalloon ?? false);
+        // In the panel's own shape (a wide panel wide, a tall one tall), big enough to print.
+        const size = pictureSize(input.ratio ?? 1, config.images.longSide);
         // The story's own seed keeps the hero looking the same in every cell.
-        const picture = await image.drawImage(gate, { prompt: comicCellPrompt(ctx, scene, withTempo, shot), seed: seedFor(ctx) });
+        const picture = await image.drawImage(gate, { prompt, seed: seedFor(ctx), size });
         return result(gate, image, picture);
       }
-    : (story, cellNumber, scene, withTempo, shot) => stubProvider.cellImage(story, cellNumber, scene, withTempo, shot);
+    : (story, cellNumber, input) => stubProvider.cellImage(story, cellNumber, input);
 
   return { ...words, panelImage, cellImage };
 }

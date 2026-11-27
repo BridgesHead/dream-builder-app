@@ -5,7 +5,7 @@ import path from "node:path";
 import mongoose from "mongoose";
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { STAND_IN } from "../../src/ai/prompts.js";
+import { PROMPT_VERSION, STAND_IN } from "../../src/ai/prompts.js";
 import { createApp } from "../../src/app.js";
 import { config } from "../../src/config.js";
 import { connectToDatabase, disconnectFromDatabase } from "../../src/db/connect.js";
@@ -104,7 +104,7 @@ describe("BE-10 generation through fal.ai (fake server)", () => {
     const jobs = await Job.find({ storyId: id }).lean();
     expect(jobs).toHaveLength(17);
     for (const job of jobs) {
-      expect(job).toMatchObject({ status: "success", provider: "fal", promptVersion: "v1", fallbackUsed: null, attempts: 1 });
+      expect(job).toMatchObject({ status: "success", provider: "fal", promptVersion: PROMPT_VERSION, fallbackUsed: null, attempts: 1 });
       expect(job.aiModel).toBe(job.type === "panel_image" ? config.fal.imageModel : config.fal.textModel);
       expect(job.durationMs).toBeGreaterThanOrEqual(0);
     }
@@ -124,6 +124,8 @@ describe("BE-10 generation through fal.ai (fake server)", () => {
     const calls = fluxCalls();
     expect(calls).toHaveLength(15);
     expect(new Set(calls.map((c) => c.body.seed)).size).toBe(1);
+    // Made in the book's picture shape (16:10), big enough to print (IMAGE_LONG_SIDE, 2048).
+    for (const c of calls) expect(c.body.image_size).toEqual({ width: 2048, height: 1280 });
     for (const c of calls) {
       const prompt = String(c.body.prompt);
       expect(prompt).toContain("watercolour");

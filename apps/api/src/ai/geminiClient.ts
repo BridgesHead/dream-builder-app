@@ -1,10 +1,12 @@
 import { config } from "../config.js";
+import type { PictureSize } from "../engine/visual.js";
 import { AiError, cleanDetail, gatedPost, pictureFromBase64, type AiGate, type ImageClient, type TextClient } from "./gate.js";
 
 // Google Gemini (generativelanguage.googleapis.com), the generateContent API.
 //   text      GEMINI_TEXT_MODEL  (default gemini-3.5-flash-lite; Google's free tier covers it),
 //             then GEMINI_TEXT_BACKUP_MODELS, straight away, when it says it's busy
-//   pictures  GEMINI_IMAGE_MODEL (default gemini-2.5-flash-image; PAID, no free tier)
+//   pictures  GEMINI_IMAGE_MODEL (default gemini-2.5-flash-image; PAID, no free tier). Each picture
+//             in the nearest shape Gemini offers; Gemini 3 image models also make it "2K"
 // Every call goes through the anonymising gate (gate.ts, BE-14). This is the only file that
 // knows Gemini's address and key.
 //
@@ -79,15 +81,40 @@ async function askModel(gate: AiGate, model: string, input: { system: string; pr
   return text;
 }
 
-export async function drawImage(gate: AiGate, input: { prompt: string; seed: number }) {
+// Gemini takes a SHAPE (one of these), not exact pixels. Every Gemini image model has these ten.
+const ASPECT_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"] as const;
+
+/** The shape Gemini can make that is nearest to `size` (compared as ratios, so 2:1 and 1:2 are equally far from 1:1). */
+function nearestAspectRatio(size: PictureSize): string {
+  const want = Math.log(size.width / size.height);
+  const ratio = (r: string) => {
+    const [w, h] = r.split(":").map(Number);
+    return Math.log(w / h);
+  };
+  return ASPECT_RATIOS.reduce((best, r) => (Math.abs(ratio(r) - want) < Math.abs(ratio(best) - want) ? r : best));
+}
+
+/**
+ * "2K" for the Gemini 3 image models (about 2048 px on the long side); gemini-2.5-flash-image has
+ * one size only (about 1K), so it gets no size at all.
+ */
+function imageSizeFor(model: string, size: PictureSize): string | undefined {
+  if (/^gemini-2\./.test(model)) return undefined;
+  const longest = Math.max(size.width, size.height);
+  return longest > 2048 ? "4K" : longest > 1024 ? "2K" : "1K";
+}
+
+export async function drawImage(gate: AiGate, input: { prompt: string; seed: number; size: PictureSize }) {
   const model = config.gemini.imageModel;
+  const imageSize = imageSizeFor(model, input.size);
   const reply = await geminiPost(gate, model, { prompt: input.prompt }, (c) => ({
     contents: [{ role: "user", parts: [{ text: c.prompt }] }],
     generationConfig: {
       responseModalities: ["IMAGE"],
       // The story's seed: helps the hero look the same from panel to panel.
       seed: input.seed,
-      imageConfig: { aspectRatio: "4:3" },
+      // The picture in (nearly) its panel's shape, and as big as the model makes.
+      imageConfig: { aspectRatio: nearestAspectRatio(input.size), ...(imageSize && { imageSize }) },
     },
   }));
   const part = partsOf(reply).find((p) => p.inlineData?.data || p.inline_data?.data);

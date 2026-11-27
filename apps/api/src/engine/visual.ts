@@ -129,6 +129,42 @@ export function sceneFallback(role: PanelRole | undefined, ctx: StoryContext, ta
   return { text: row.replaceAll("{place}", place), source: "visual_brief" };
 }
 
+// ---- Picture sizes -----------------------------------------------------------------------
+//
+// Pictures are MADE in the shape they're printed in, big enough for print (300 dpi):
+//   storybook panel   16:10 (the book's and the website's picture box)
+//   comic panel       its frame's shape on the page (comicPlan.ts cellPictureRatio)
+// The long side comes from IMAGE_LONG_SIDE (2048 by default: a full-width panel of the 8 × 10 in
+// book is about 6.6 in wide, so 2048 px ≈ 310 dpi). Each AI service then shrinks it to what it can
+// make (scaleToFit), keeping the shape.
+
+/** A picture's size in pixels. */
+export interface PictureSize {
+  width: number;
+  height: number;
+}
+
+/** The storybook picture's shape: 16:10. */
+export const STORY_PICTURE_RATIO = 1.6;
+
+/** The image models want sizes in steps of 32 pixels, and nothing too thin. */
+const STEP = 32;
+const MIN_SIDE = 512;
+const toStep = (v: number) => Math.max(MIN_SIDE, Math.round(v / STEP) * STEP);
+
+/** A picture of this shape (width ÷ height) whose longer side is `longSide` pixels. */
+export function pictureSize(ratio: number, longSide: number): PictureSize {
+  return ratio >= 1 ? { width: toStep(longSide), height: toStep(longSide / ratio) } : { width: toStep(longSide * ratio), height: toStep(longSide) };
+}
+
+/** The same shape, shrunk (never grown) so neither side is over `maxSide`. */
+export function scaleToFit(size: PictureSize, maxSide: number): PictureSize {
+  const longest = Math.max(size.width, size.height);
+  if (longest <= maxSide) return size;
+  const down = (v: number) => Math.max(MIN_SIDE, Math.floor((v * maxSide) / longest / STEP) * STEP);
+  return { width: down(size.width), height: down(size.height) };
+}
+
 /** The same number for every panel of a story: hero name + dream (PRD F6). */
 export function seedFor(ctx: StoryContext): number {
   const digest = createHash("sha256").update(`${ctx.heroName.toLowerCase()}|${ctx.answers.aspiration.trim().toLowerCase()}`).digest();
@@ -156,13 +192,21 @@ const SHOT_WORDS: Record<Shot, string> = {
   full: "full-body shot: the hero from head to toe in the centre, with space above and below",
 };
 
+/** Room for the speech balloon, which is drawn over the top-left of a comic panel's picture. */
+export const BALLOON_SPACE =
+  "Leave the top-left quarter of the picture calm and simple (plain sky, wall or soft background) with no face, head or important detail in it; the hero's head stays below and to the right of it";
+
 /**
  * The picture prompt for one comic panel (BE-11): the child's chosen look as a comic panel,
  * the camera shot that fits the panel's shape, the same hero as every panel, ONE action, and
  * Tempo the musical squirrel when the panel has his notes. No words in the picture: the book
  * draws the balloons, the narration and the sound effects.
+ *
+ * `withBalloon`: the panel has a speech balloon, which the book draws ON the picture in its
+ * top-left corner (renderBook.ts, ComicCell.tsx). Like a comic artist, the picture leaves calm,
+ * empty space there, so the balloon never hides the hero's face.
  */
-export function comicCellPrompt(ctx: StoryContext, scene: string, withTempo: boolean, shot: Shot | null = null): string {
+export function comicCellPrompt(ctx: StoryContext, scene: string, withTempo: boolean, shot: Shot | null = null, withBalloon = false): string {
   const costume = ctx.world ? COSTUMES[ctx.world.name] : undefined;
   const tools = ctx.toolWords.length ? `with ${ctx.toolWords.join(" and ")}` : "";
   return [
@@ -172,6 +216,7 @@ export function comicCellPrompt(ctx: StoryContext, scene: string, withTempo: boo
     `Scene, one single moment: ${scene}`,
     "Expressive face and body language that show the feeling, a dynamic pose, a simple uncluttered background, strong silhouette",
     ...(withTempo ? ["A small friendly squirrel with headphones, Tempo, sways to music nearby"] : []),
+    ...(withBalloon ? [BALLOON_SPACE] : []),
     "The same hero in every panel. No text, no words, no letters, no speech bubbles, no panel borders.",
   ].join(". ");
 }

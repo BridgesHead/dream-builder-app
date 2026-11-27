@@ -86,10 +86,15 @@ export async function startFakeFreeAi(): Promise<FakeFreeAi> {
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (c: Buffer) => chunks.push(c));
-    req.on("end", () => {
+    req.on("end", async () => {
       const path = decodeURIComponent(req.url ?? "");
+      const raw = Buffer.concat(chunks);
+      const type = String(req.headers["content-type"] ?? "");
+      // Cloudflare's FLUX.2 models are sent multipart form data; everything else is JSON.
+      const form = type.startsWith("multipart/form-data") ? Object.fromEntries(await new Response(raw, { headers: { "content-type": type } }).formData()) : null;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a fake server reads any shape
-      const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as Record<string, any>;
+      const body = (form ?? JSON.parse(raw.toString("utf8") || "{}")) as Record<string, any>;
+      if (form) body.__format = "form";
 
       // ---- Gemini: POST /v1beta/models/<model>:generateContent ----
       if (path.startsWith("/v1beta/models/")) {

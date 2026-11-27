@@ -10,8 +10,11 @@ import { familyNameWords, type FamilyDetails } from "./anonymise.js";
 //
 // PROMPT_VERSION is saved on every job, so we always know which prompts made a story.
 // Change it whenever the wording here changes (decision 5A: "v1" = our own prompts; the
-// prototype's prompts, if Sami Bhai sends them, become "v2").
-export const PROMPT_VERSION = "v1";
+// prototype's prompts, if Sami Bhai sends them, become "v2"). The picture prompts in
+// engine/visual.ts count too.
+//   v1    our first prompts
+//   v1.1  comic pictures leave calm space top-left for the speech balloon (visual.ts BALLOON_SPACE)
+export const PROMPT_VERSION = "v1.1";
 
 // ---- The hero's name in prompts (decision 6A, then BE-14) --------------------------------
 // The guide (BE-14) wants the hero's name to reach the model. But a child may name the hero

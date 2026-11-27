@@ -1,9 +1,11 @@
 import { config } from "../config.js";
+import { scaleToFit, type PictureSize } from "../engine/visual.js";
 import { AiError, cleanDetail, gatedPost, pictureFromBase64, type AiGate, type ImageClient, type TextClient } from "./gate.js";
 
 // Cloudflare Workers AI (api.cloudflare.com, /ai/run/<model>).
 //   text      CLOUDFLARE_TEXT_MODEL  (default @cf/meta/llama-3.3-70b-instruct-fp8-fast)
-//   pictures  CLOUDFLARE_IMAGE_MODEL (default @cf/black-forest-labs/flux-1-schnell)
+//   pictures  CLOUDFLARE_IMAGE_MODEL (default @cf/black-forest-labs/flux-1-schnell: 1024 square only;
+//             a FLUX.2 model, e.g. …/flux-2-klein-4b, makes each picture in its panel's shape)
 // Both fit in Cloudflare's FREE daily allowance (10,000 "neurons" a day). When it runs out,
 // Cloudflare answers 429 until the next day (the job then fails and can be tried again).
 // Every call goes through the anonymising gate (gate.ts, BE-14). This is the only file that
@@ -14,6 +16,8 @@ import { AiError, cleanDetail, gatedPost, pictureFromBase64, type AiGate, type I
 const SERVICE = "Cloudflare";
 // flux-1-schnell refuses a prompt longer than this.
 const MAX_IMAGE_PROMPT = 2048;
+// FLUX.2 on Cloudflare: width and height 256–1920.
+const FLUX2_MAX_SIDE = 1920;
 
 interface CloudflareReply<T> {
   success?: boolean;
@@ -21,7 +25,13 @@ interface CloudflareReply<T> {
   errors?: { message?: string }[];
 }
 
-async function cloudflareRun<T>(gate: AiGate, model: string, texts: Record<string, string>, body: (clean: Record<string, string>) => Record<string, unknown>): Promise<T> {
+async function cloudflareRun<T>(
+  gate: AiGate,
+  model: string,
+  texts: Record<string, string>,
+  body: (clean: Record<string, string>) => Record<string, unknown>,
+  format: "json" | "form" = "json",
+): Promise<T> {
   const { accountId, token } = config.cloudflare;
   if (!accountId || !token) throw new AiError("CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN must be set", null, SERVICE);
   const reply = await gatedPost<CloudflareReply<T>>(gate, {
@@ -33,6 +43,7 @@ async function cloudflareRun<T>(gate: AiGate, model: string, texts: Record<strin
     texts,
     body,
     timeoutMs: config.cloudflare.callTimeoutMs,
+    format,
   });
   if (reply.success === false || reply.result === undefined) {
     const detail = reply.errors?.map((e) => e.message).filter(Boolean).join("; ");
@@ -58,13 +69,31 @@ export async function askText(gate: AiGate, input: { system: string; prompt: str
   return text;
 }
 
-export async function drawImage(gate: AiGate, input: { prompt: string; seed: number }) {
+/** The FLUX.2 models ("@cf/black-forest-labs/flux-2-dev", "…/flux-2-klein-4b", …) take a size and a seed. */
+const takesSize = (model: string) => /\/flux-2/.test(model);
+
+export async function drawImage(gate: AiGate, input: { prompt: string; seed: number; size: PictureSize }) {
   const model = config.cloudflare.imageModel;
-  // flux-1-schnell takes no seed, so the hero may look a little different from panel to panel.
-  const result = await cloudflareRun<{ image?: unknown }>(gate, model, { prompt: input.prompt.slice(0, MAX_IMAGE_PROMPT) }, (c) => ({
-    prompt: c.prompt.slice(0, MAX_IMAGE_PROMPT),
-    steps: config.cloudflare.imageSteps,
-  }));
+  const prompt = { prompt: input.prompt.slice(0, MAX_IMAGE_PROMPT) };
+  const result = takesSize(model)
+    ? // FLUX.2: the picture in its panel's shape, up to 1920 px a side, with the story's seed.
+      // These models take multipart form data, not JSON (Cloudflare's docs).
+      await cloudflareRun<{ image?: unknown }>(
+        gate,
+        model,
+        prompt,
+        (c) => {
+          const size = scaleToFit(input.size, FLUX2_MAX_SIDE);
+          return { prompt: c.prompt.slice(0, MAX_IMAGE_PROMPT), width: size.width, height: size.height, seed: input.seed };
+        },
+        "form",
+      )
+    : // flux-1-schnell: always 1024 × 1024 and no seed, so the hero may look a little different
+      // from panel to panel. The book crops the square to the panel's shape.
+      await cloudflareRun<{ image?: unknown }>(gate, model, prompt, (c) => ({
+        prompt: c.prompt.slice(0, MAX_IMAGE_PROMPT),
+        steps: config.cloudflare.imageSteps,
+      }));
   return pictureFromBase64(SERVICE, result.image);
 }
 

@@ -113,14 +113,22 @@ const envSchema = z.object({
   CLOUDFLARE_BASE_URL: z.url().default("https://api.cloudflare.com/client/v4"),
   CLOUDFLARE_TEXT_MODEL: z.string().min(1).default("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
   CLOUDFLARE_TEXT_MAX_TOKENS: z.coerce.number().int().min(256).max(32_000).default(4096),
+  // flux-1-schnell: always 1024 × 1024 (no size choice). A FLUX.2 model ("@cf/black-forest-labs/flux-2-klein-4b",
+  // "…/flux-2-dev") makes the picture in its panel's shape, up to 1920 px. klein-4b fits the free allowance.
   CLOUDFLARE_IMAGE_MODEL: z.string().min(1).default("@cf/black-forest-labs/flux-1-schnell"),
-  // More steps = a better picture but more of the free allowance (flux-1-schnell allows 1–8).
+  // flux-1-schnell only: more steps = a better picture but more of the free allowance (1–8).
   CLOUDFLARE_IMAGE_STEPS: z.coerce.number().int().min(1).max(8).default(4),
   CLOUDFLARE_CALL_TIMEOUT_MS: z.coerce.number().int().min(100).default(50_000),
   // The free Gemini / Cloudflare tiers may use what we send, so they are for made-up test
   // children only. On a server (NODE_ENV=production, which staging also uses) they need this
   // set to "true" on purpose, e.g. on a test server; never on the live site.
   ALLOW_FREE_AI: z.enum(["true", "false"]).default("false"),
+
+  // ---- Picture size (BE-10, BE-18) ----
+  // The longer side of every AI picture, in pixels. Pictures are made in the shape they're printed
+  // in (a wide panel wide, a tall one tall); 2048 prints a full-width panel at about 300 dpi. Each
+  // service makes at most what it can (Cloudflare FLUX.2: 1920; flux-1-schnell: always 1024 square).
+  IMAGE_LONG_SIDE: z.coerce.number().int().min(512).max(4096).default(2048),
 
   // ---- Picture storage (BE-10) ----
   // The S3 bucket in the AWS UAE region. Set: pictures go to S3. Not set: a local folder
@@ -259,6 +267,9 @@ export const config = {
     textModel: parsed.data.FAL_TEXT_MODEL,
     imageModel: parsed.data.FAL_IMAGE_MODEL,
     callTimeoutMs: parsed.data.FAL_CALL_TIMEOUT_MS,
+  },
+  images: {
+    longSide: parsed.data.IMAGE_LONG_SIDE,
   },
   storage: {
     bucket: parsed.data.S3_BUCKET ?? null,

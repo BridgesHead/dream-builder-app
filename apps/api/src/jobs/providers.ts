@@ -72,9 +72,22 @@ export interface AiProvider {
   rewriteSentence(story: StoryForAi, input: RewriteSentenceInput): Promise<AiResult<string>>;
   /** One comic page (BE-11): 4 cells re-telling the page's story panels. The job tidies them. */
   comicPage(story: StoryForAi, page: ComicPagePlan, panels: ComicPanelText[], totalPages: number): Promise<AiResult<ComicCellDraft[]>>;
-  /** Draws one comic cell (1–40) from its scene. */
-  /** `shot`: the camera shot that fits the panel's shape (wide / medium / close / full). */
-  cellImage(story: StoryForAi, cellNumber: number, scene: string, withTempo: boolean, shot?: Shot | null): Promise<AiResult<PanelPicture>>;
+  /** Draws one comic cell (1–40), in its panel's shape. */
+  cellImage(story: StoryForAi, cellNumber: number, input: CellPictureInput): Promise<AiResult<PanelPicture>>;
+}
+
+/** What one comic cell's picture shows, and its shape. */
+export interface CellPictureInput {
+  /** What the picture shows ("the hero …", never a name). */
+  scene: string;
+  /** Tempo the musical squirrel is in it. */
+  withTempo: boolean;
+  /** The camera shot that fits the panel's shape (wide / medium / close / full). */
+  shot?: Shot | null;
+  /** The cell has a speech balloon: the picture leaves calm space for it in the top-left corner. */
+  withBalloon?: boolean;
+  /** The panel's shape on the printed page, width ÷ height (comicPlan.ts cellPictureRatio); 1 if not given. */
+  ratio?: number;
 }
 
 /** A story panel as a comic page needs it. */

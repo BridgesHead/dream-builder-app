@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import PDFDocument from "pdfkit";
-import type { Bubble, ComicLayout } from "../engine/comicPlan.js";
+import { COMIC_FRAMES, type Bubble, type ComicLayout } from "../engine/comicPlan.js";
+import { burstPoints, ovalAround, SPIKE_REACH, tailBase } from "./balloon.js";
 import type { PrintProfile } from "./profiles.js";
 
 // Draws one storybook as a PDF (guide BE-18), in the SAME design as the book on the website
@@ -12,8 +13,9 @@ import type { PrintProfile } from "./profiles.js";
 //   4  Today's Mission       the child's dream
 //   5… the story            each panel opens a new page: picture, panel name, ornament, text with a
 //                           drop capital. A long text carries on to the next page, like the website.
-//      (a comic, BE-11)     instead: one page per comic page, 4 cells in a 2×2 grid, each with its
-//                           picture, a caption box, a speech or thought bubble, and Tempo's notes
+//      (a comic, BE-11)     instead: one page per comic page, 4 panels in the page's arrangement,
+//                           each with its picture, the balloon ON the picture (an oval, or a burst for
+//                           a shout), the sound effect, Tempo's notes and the narration line under it
 //      (fillers)            "My drawing" pages, only if the profile needs a page-count multiple
 //      The End              the hero resting, "Thank you for reading …"
 //      the back cover       purple board, "Made with Dream Builder" (the voice QR goes here later, BE-15)
@@ -100,15 +102,8 @@ const COL = {
 // Fraunces (book text) and Nunito (labels): the website's fonts, SIL Open Font License.
 const ASSETS = new URL("../../assets/", import.meta.url);
 const asset = (p: string) => readFileSync(new URL(p, ASSETS));
-// ---- Comic page arrangements (BE-11) ----------------------------------------------------
-// Each panel's place on the page as [x, y, width, height], fractions of the page's text area.
-// The panel order and shapes match comicPlan.ts PANEL_SHAPES.
-const COMIC_FRAMES: Record<ComicLayout, [number, number, number, number][]> = {
-  big_top: [[0, 0, 1, 0.56], [0, 0.56, 1 / 3, 0.44], [1 / 3, 0.56, 1 / 3, 0.44], [2 / 3, 0.56, 1 / 3, 0.44]],
-  big_bottom: [[0, 0, 1 / 3, 0.44], [1 / 3, 0, 1 / 3, 0.44], [2 / 3, 0, 1 / 3, 0.44], [0, 0.44, 1, 0.56]],
-  tall: [[0, 0, 0.42, 1], [0.42, 0, 0.58, 0.5], [0.42, 0.5, 0.29, 0.5], [0.71, 0.5, 0.29, 0.5]],
-  grid: [[0, 0, 0.5, 0.5], [0.5, 0, 0.5, 0.5], [0, 0.5, 0.5, 0.5], [0.5, 0.5, 0.5, 0.5]],
-};
+// The comic page arrangements (BE-11) live in engine/comicPlan.ts (COMIC_FRAMES): the pictures
+// are made in the same shapes.
 
 const FONT_FILES = {
   Display: "fonts/fraunces-latin-500-normal.woff",
@@ -581,9 +576,8 @@ export async function renderBook(book: BookContent, profile: PrintProfile): Prom
   /**
    * One comic page (BE-11), styled like a printed children's comic: 4 panels in the page's
    * arrangement (a big panel for the big moment, see comicPlan.ts LAYOUTS), heavy ink frames,
-   * the balloon in a white band at the top of its panel (its tail reaching into the picture),
-   * the sound effect on the picture, and the short picture-book line under it. The words never
-   * hide the art.
+   * the balloon ON the picture in its top-left corner (read first, its tail pointing down at the
+   * hero in the middle), the sound effect on the picture, and the short picture-book line under it.
    */
   function comicPage(page: ComicPage): void {
     const box = storyPageFrame(page.label || book.title);
@@ -602,20 +596,18 @@ export async function renderBook(book: BookContent, profile: PrintProfile): Prom
       doc.rect(frame.x + 2.2, frame.y + 2.2, frame.w, frame.h).fillColor(COL.ink, 0.16).fill();
       doc.rect(frame.x, frame.y, frame.w, frame.h).fillColor("#FFFFFF", 1).fill();
 
-      const balloon = balloonBand(cell, frame);
       const line = narrationLine(cell.caption, frame);
-      const pic: Box = { x: frame.x, y: frame.y + balloon.height, w: frame.w, h: frame.h - balloon.height - line.height };
+      const pic: Box = { x: frame.x, y: frame.y, w: frame.w, h: frame.h - line.height };
       const image = open(cell.image, label);
       if (image && image.width >= PLACEHOLDER_MAX_WIDTH) coverImage(image, pic, label);
       else {
         warnings.push(`${label}: ${image ? "only a placeholder picture" : "no picture"} (the hero is shown instead)`);
         heroScene(pic);
       }
-      if (balloon.height > 0) doc.moveTo(pic.x, pic.y).lineTo(pic.x + pic.w, pic.y).lineWidth(1.6).strokeColor(COL.ink, 1).stroke();
       if (line.height > 0) doc.moveTo(pic.x, pic.y + pic.h).lineTo(pic.x + pic.w, pic.y + pic.h).lineWidth(1.6).strokeColor(COL.ink, 1).stroke();
       if (cell.sfx) soundEffect(cell.sfx, pic);
       if (cell.tempo) tempoBubble(cell.tempo, pic);
-      balloon.draw(pic.y);
+      balloon(cell, pic);
       line.draw(pic.y + pic.h);
       doc.rect(frame.x, frame.y, frame.w, frame.h).lineWidth(1.8).strokeColor(COL.ink, 1).stroke();
     });
@@ -640,82 +632,62 @@ export async function renderBook(book: BookContent, profile: PrintProfile): Prom
   }
 
   /**
-   * The balloon band at the top of a panel: measures it (so the picture gets the rest) and
-   * returns a function that draws it once the picture is in place (the tail overlaps it).
-   * Speech is an oval with a tail, thought a straight-edged balloon with cut corners and little circles, whisper a dashed oval,
-   * shout a spiky burst.
+   * The balloon, drawn ON the picture like a printed comic (no white band above it): in the
+   * top-left corner, which a reader looks at first, with its tail pointing down at the hero (the
+   * pictures keep the hero in the middle, with calm space at the top: visual.ts comicCellPrompt).
+   *   speech, thought, whisper   a solid white oval with a pointed tail
+   *   shout                      a spiky burst with a sharp tail
+   * Only these two shapes, as the product asks (no thought-bubble circles, no dashed outline).
+   * The geometry is the same as the website's balloon (apps/web/src/lib/balloon.ts).
    */
-  function balloonBand(cell: ComicCellContent, frame: Box): { height: number; draw: (picTop: number) => void } {
+  function balloon(cell: ComicCellContent, pic: Box): void {
     const text = cell.dialogue?.trim();
-    if (!text || cell.bubbleType === "none") return { height: 0, draw: () => undefined };
+    if (!text || cell.bubbleType === "none") return;
     const kind = cell.bubbleType;
-    const pad = 0.45 * em;
     const shout = kind === "shout";
-    const thought = kind === "thought";
-    const padX = shout ? 1.4 * em : thought ? 0.8 * em : 0.75 * em;
-    const padY = shout ? 0.8 * em : thought ? 0.45 * em : 0.42 * em;
-    const maxW = frame.w * 0.86;
     const family: FontName = shout ? "SansHeavy" : "SansBold";
-    const size = fitSize(text, family, (shout ? 0.66 : 0.62) * em, maxW - padX * 2, frame.h * 0.3, { align: "center" });
-    const textW = Math.min(maxW - padX * 2, doc.widthOfString(text) + 1);
-    const w = textW + padX * 2;
-    const h = doc.heightOfString(text, { width: textW, align: "center" }) + padY * 2;
-    return {
-      height: h + pad * 2,
-      draw: (picTop) => {
-        // Left of centre, so the tail can point down at the hero (the pictures keep the hero central).
-        const bx = frame.x + Math.max(pad, (frame.w - w) * 0.35);
-        const by = picTop - pad - h;
-        const tx = Math.min(Math.max(bx + w * 0.55, frame.x + frame.w * 0.4), frame.x + frame.w * 0.6);
-        const r = Math.min(h / 2, 1.2 * em);
-        doc.save();
-        if (kind === "speech" || kind === "whisper") {
-          const tail: [number, number][] = [
-            [tx - 0.4 * em, by + h - 1],
-            [tx + 0.4 * em, by + h - 1],
-            [tx - 0.05 * em, picTop + 1.0 * em],
-          ];
-          const pen = () => (kind === "whisper" ? doc.lineWidth(1.1).dash(2.2, { space: 1.8 }) : doc.lineWidth(1.2));
-          doc.polygon(...tail).fillColor("#FFFFFF", 1).fill();
-          pen();
-          doc.moveTo(...tail[0]).lineTo(...tail[2]).lineTo(...tail[1]).strokeColor(COL.ink, 1).stroke();
-          doc.roundedRect(bx, by, w, h, r).fillColor("#FFFFFF", 1).fill();
-          pen();
-          doc.roundedRect(bx, by, w, h, r).strokeColor(COL.ink, 1).stroke();
-          doc.undash();
-          // Join the tail to the balloon (hide the outline where they meet).
-          doc.rect(tx - 0.38 * em, by + h - 1.5, 0.76 * em, 2.4).fillColor("#FFFFFF", 1).fill();
-        } else if (thought) {
-          // Straight edges with the corners cut off, then little circles down to the thinker.
-          const c = Math.min(0.75 * em, h / 3);
-          doc
-            .polygon([bx + c, by], [bx + w - c, by], [bx + w, by + c], [bx + w, by + h - c], [bx + w - c, by + h], [bx + c, by + h], [bx, by + h - c], [bx, by + c])
-            .lineWidth(1.2)
-            .lineJoin("miter")
-            .fillAndStroke("#FFFFFF", COL.ink);
-          for (const [dy, rad, dx] of [
-            [0.55, 0.26, 0],
-            [1.1, 0.16, -0.25],
-          ] as const) {
-            doc.circle(tx + dx * em, by + h + dy * em, rad * em).lineWidth(1).fillAndStroke("#FFFFFF", COL.ink);
-          }
-        } else {
-          // Shout: a spiky burst, with a sharp tail.
-          const spikes = Math.max(14, Math.round((w + h) / (0.75 * em)));
-          const pts: [number, number][] = [];
-          for (let k = 0; k < spikes * 2; k += 1) {
-            const a = (k / (spikes * 2)) * Math.PI * 2;
-            const out = k % 2 === 0 ? 1 : 0.82;
-            pts.push([bx + w / 2 + Math.cos(a) * (w / 2) * out, by + h / 2 + Math.sin(a) * (h / 2) * out]);
-          }
-          doc.polygon([tx - 0.35 * em, by + h * 0.85], [tx + 0.35 * em, by + h * 0.85], [tx, picTop + 1.0 * em]).lineWidth(1.3).fillAndStroke("#FFFFFF", COL.ink);
-          doc.polygon(...pts).lineWidth(1.3).fillAndStroke("#FFFFFF", COL.ink);
-        }
-        doc.restore();
-        font(family, size, COL.ink);
-        doc.text(text, bx + padX, by + padY, { width: textW, align: "center" });
-      },
-    };
+    const margin = 0.45 * em;
+    const pad = 0.2 * em; // room between the words and the oval
+    const reach = shout ? SPIKE_REACH : 1; // a burst's points stick out past its oval
+    // An oval holding a box of words is up to √2 times the box: the words get the rest.
+    const maxTextW = (pic.w * 0.82) / (Math.SQRT2 * reach) - pad * 2;
+    const maxTextH = (pic.h * 0.4) / (Math.SQRT2 * reach) - pad * 2;
+    const size = fitSize(text, family, (shout ? 0.66 : 0.62) * em, maxTextW, maxTextH, { align: "center" });
+    const textW = Math.min(maxTextW, doc.widthOfString(text) + 1);
+    const textH = doc.heightOfString(text, { width: textW, align: "center" });
+    const { rx, ry } = ovalAround(textW + pad * 2, textH + pad * 2);
+    const cx = pic.x + margin + rx * reach;
+    const cy = pic.y + margin + ry * reach;
+    // The tail leans down towards the middle of the picture, where the hero is (never sideways).
+    const tailLen = Math.min(1.5 * em, pic.h * 0.13);
+    const tip: [number, number] = [Math.min(Math.max(pic.x + pic.w / 2, cx - rx * 0.3), cx + rx * 0.45), cy + ry * reach + tailLen];
+    const base = tailBase(cx, cy, rx, ry, tip, shout ? 0.85 : 0.92);
+    const ink = (width: number) => doc.lineWidth(width).lineJoin("round").strokeColor(COL.ink, 1);
+
+    doc.save();
+    if (shout) {
+      // The tail first, so the burst covers where they meet.
+      doc.polygon(base[0], tip, base[1]).fillColor("#FFFFFF", 1).fill();
+      ink(1.3);
+      doc.moveTo(...base[0]).lineTo(...tip).lineTo(...base[1]).stroke();
+      const burst = burstPoints(cx, cy, rx, ry, Math.max(12, Math.round((rx + ry) / (0.42 * em))));
+      doc.polygon(...burst).fillColor("#FFFFFF", 1).fill();
+      ink(1.3);
+      doc.lineJoin("miter").polygon(...burst).stroke();
+    } else {
+      // Speech, thought and whisper: one solid white oval with a pointed tail (asked for on
+      // 2026-11-27: no little thought circles, no dashed outline).
+      doc.ellipse(cx, cy, rx, ry).fillColor("#FFFFFF", 1).fill();
+      ink(1.2);
+      doc.ellipse(cx, cy, rx, ry).stroke();
+      // The white tail covers the oval's outline where they join; then its two sides are inked.
+      doc.polygon(base[0], tip, base[1]).fillColor("#FFFFFF", 1).fill();
+      ink(1.2);
+      doc.moveTo(...base[0]).lineTo(...tip).lineTo(...base[1]).stroke();
+    }
+    doc.restore();
+    font(family, size, COL.ink);
+    doc.text(text, cx - textW / 2, cy - textH / 2, { width: textW, align: "center" });
   }
 
   /** A sound effect, big and bold on the picture, like a printed comic ("WHOOSH!"). */

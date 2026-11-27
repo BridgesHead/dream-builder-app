@@ -67,7 +67,8 @@ Settings come from environment variables. On your PC they live in `.env`, which 
 | `AI_TEXT_PROVIDER` / `AI_IMAGE_PROVIDER` | no | `AI_PROVIDER` | Pick the text and the pictures separately, e.g. the free mix `gemini` + `cloudflare`. See "Free AI for testing". |
 | `FAL_KEY` | with `fal` | none | The fal.ai key. Secret: `.env` or the AWS secret store only. |
 | `GEMINI_API_KEY` | with `gemini` | none | From aistudio.google.com. Models: `GEMINI_TEXT_MODEL` (`gemini-2.5-flash`), `GEMINI_IMAGE_MODEL` (`gemini-2.5-flash-image`, paid). |
-| `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` | with `cloudflare` | none | A token with only the Workers AI permission. Models: `CLOUDFLARE_TEXT_MODEL`, `CLOUDFLARE_IMAGE_MODEL` (FLUX schnell), `CLOUDFLARE_IMAGE_STEPS` (4). |
+| `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` | with `cloudflare` | none | A token with only the Workers AI permission. Models: `CLOUDFLARE_TEXT_MODEL`, `CLOUDFLARE_IMAGE_MODEL` (FLUX schnell: 1024 squares; `@cf/black-forest-labs/flux-2-klein-4b`: each picture in its panel's shape, up to 1920 px), `CLOUDFLARE_IMAGE_STEPS` (4, schnell only). |
+| `IMAGE_LONG_SIDE` | no | `2048` | The long side of every AI picture, in px. Pictures are made in the shape they're printed in (storybook 16:10, each comic panel its frame's shape), so 2048 prints at about 300 dpi. fal.ai makes it exactly; Cloudflare FLUX.2 up to 1920; Gemini the nearest of its shapes ("2K" on Gemini 3 image models). |
 | `FAL_TEXT_MODEL` / `FAL_IMAGE_MODEL` | no | `google/gemini-2.5-flash` / `fal-ai/flux/dev` | The text model (behind `fal-ai/any-llm`) and the FLUX model. Sami Bhai confirms the text model. |
 | `S3_BUCKET` | in production | none | The picture bucket in the AWS UAE region (`S3_REGION`, default `me-central-1`). Not set: pictures go to `STORAGE_DIR` (`data/storage`). |
 | `IMAGE_URL_TTL_SECONDS` | no | `3600` | How long a picture link given to the app keeps working. |
@@ -382,7 +383,9 @@ CLOUDFLARE_API_TOKEN=...      # My Profile → API Tokens → "Workers AI" templ
 - Gemini free limits are per model, per day. `gemini-2.5-flash` allows only about 20 requests a day,
   and one story uses about 18 (story, title, a scene per panel). Set `GEMINI_TEXT_MODEL=gemini-3.5-flash-lite`
   for testing. When the limit is hit, scenes fall back to the Visual Brief table (the story still finishes).
-- FLUX schnell takes no seed, so the hero can look a little different from panel to panel.
+- FLUX schnell takes no seed and no size: 1024 squares, cropped to each panel, and the hero can look a little
+  different from panel to panel. For print-size pictures in each panel's shape (and the story's seed), set
+  `CLOUDFLARE_IMAGE_MODEL=@cf/black-forest-labs/flux-2-klein-4b` (up to 1920 px; about one comic a day on the free allowance).
 - Tests: `tests/integration/freeGeneration.test.ts` against fake servers (`tests/helpers/fakeFreeAi.ts`).
 
 ## Comic books (BE-11)
@@ -422,8 +425,12 @@ story_text done → one comic_script job per comic page (8 or 10)
   the last try uses the **backup splitter** (the page's sentences shared over 4 cells): the job says
   `fallback` / `comic_splitter`, and the comic still finishes.
 - **Pictures** have no words in them: the website's book (FE-07, `Flipbook.tsx` + `ComicCell.tsx`) and the PDF
-  draw the balloons (in a band above the picture, tail pointing in), sound effects and narration lines. The picture prompt is the chosen look as a comic panel + the hero's
-  fixed look + the scene (+ Tempo when the cell has him). Saved as `stories/<id>/cell-NN.<ext>`.
+  draw the balloons ON the picture, like a printed comic: top-left (read first), the tail leaning down at the
+  hero. Speech, thought and whisper are one solid white oval with a pointed tail; a shout is a spiky burst
+  (the shapes: `src/print/balloon.ts`, copied to the website's `src/lib/balloon.ts`). Sound effects and the
+  narration line too. The picture prompt is the chosen look as a comic panel + the hero's fixed look + the scene
+  (+ Tempo when the cell has him, + calm empty space top-left when the cell has a balloon, `BALLOON_SPACE`).
+  Saved as `stories/<id>/cell-NN.<ext>`.
 - `GET /stories/:id` gives each cell an `imageUrl`; `GET /stories/:id/status` adds `cells`, and a comic's
   progress counts the cell pictures. "Try again" covers failed cell jobs.
 - **The book PDF** of a comic has one page per comic page, in that page's layout (`COMIC_FRAMES` in

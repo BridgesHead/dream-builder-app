@@ -67,6 +67,31 @@ export const PANEL_SHAPES: Record<ComicLayout, PanelShape[]> = {
   grid: ["square", "square", "square", "square"],
 };
 
+/**
+ * Each panel's place on a printed page as [x, y, width, height], fractions of the page's story
+ * area. The book draws the panels here (print/renderBook.ts), and the picture is MADE in the
+ * panel's shape (cellPictureRatio), so the AI composes for the frame and nothing is cut away.
+ * The panel order matches PANEL_SHAPES.
+ */
+export const COMIC_FRAMES: Record<ComicLayout, [number, number, number, number][]> = {
+  big_top: [[0, 0, 1, 0.56], [0, 0.56, 1 / 3, 0.44], [1 / 3, 0.56, 1 / 3, 0.44], [2 / 3, 0.56, 1 / 3, 0.44]],
+  big_bottom: [[0, 0, 1 / 3, 0.44], [1 / 3, 0, 1 / 3, 0.44], [2 / 3, 0, 1 / 3, 0.44], [0, 0.44, 1, 0.56]],
+  tall: [[0, 0, 0.42, 1], [0.42, 0, 0.58, 0.5], [0.42, 0.5, 0.29, 0.5], [0.71, 0.5, 0.29, 0.5]],
+  grid: [[0, 0, 0.5, 0.5], [0.5, 0, 0.5, 0.5], [0, 0.5, 0.5, 0.5], [0.5, 0.5, 0.5, 0.5]],
+};
+
+/**
+ * The printed book's story area, width ÷ height: the 8 × 10 in page less its margins and running
+ * head (measured from the generic print profile: about 473 × 589 pt).
+ */
+export const STORY_AREA_RATIO = 0.8;
+
+/** A comic panel's shape, width ÷ height, e.g. 1.43 for the big panel on top of a page. */
+export function cellPictureRatio(layout: ComicLayout | null | undefined, cell: number): number {
+  const frame = COMIC_FRAMES[layout ?? "grid"]?.[cell - 1] ?? COMIC_FRAMES.grid[0];
+  return (frame[2] / frame[3]) * STORY_AREA_RATIO;
+}
+
 /** The shots each panel shape allows; the first is the default. */
 export const SHOTS_FOR: Record<PanelShape, Shot[]> = {
   big: ["wide", "medium"],

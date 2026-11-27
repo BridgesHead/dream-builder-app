@@ -73,7 +73,7 @@ describe("the one door to the AI services", () => {
     // No keys are set in tests: the errors must be about the key, not a leak.
     await expect(falClient.askText(g, { system: "s", prompt: "Zed smiled." })).rejects.toThrow(/FAL_KEY/);
     await expect(geminiClient.askText(g, { system: "s", prompt: "Zed smiled." })).rejects.toThrow(/GEMINI_API_KEY/);
-    await expect(cloudflareClient.drawImage(g, { prompt: "Zed smiled.", seed: 1 })).rejects.toThrow(/CLOUDFLARE_API_TOKEN/);
+    await expect(cloudflareClient.drawImage(g, { prompt: "Zed smiled.", seed: 1, size: { width: 1024, height: 1024 } })).rejects.toThrow(/CLOUDFLARE_API_TOKEN/);
   });
 
   it("cleans every text before it is sent, and keeps only the cleaned text for the job record", async () => {

@@ -6,7 +6,7 @@ import { comicPagePrompt, STAND_IN } from "../../src/ai/prompts.js";
 import { StoryJsonError } from "../../src/ai/storyJson.js";
 import { cellIndex, cellPosition, cleanSfx, cleanTempo, COMIC_CELL_COUNT, comicPlanFor, PANEL_SHAPES, splitPage, tidyCells, type ComicCellDraft } from "../../src/engine/comicPlan.js";
 import { buildContext } from "../../src/engine/index.js";
-import { comicCellPrompt } from "../../src/engine/visual.js";
+import { BALLOON_SPACE, comicCellPrompt } from "../../src/engine/visual.js";
 import { EMBER_ANSWERS } from "../fixtures/engine/samples.js";
 
 const cell = (over: Partial<ComicCellDraft> = {}): ComicCellDraft => ({ caption: "Ember walked on.", dialogue: null, bubbleType: "none", tempo: null, sfx: null, shot: "medium", scene: "the hero walks", ...over });
@@ -189,9 +189,11 @@ describe("BE-11 reading the AI's comic page", () => {
     expect(withTempo).toContain("golden-tipped tail");
     expect(withTempo).toContain("squirrel");
     expect(withTempo).toContain("No text");
-    expect(withTempo).not.toContain("top third"); // the words sit above the picture now
     expect(withTempo).toContain("Expressive face");
     expect(comicCellPrompt(ctx, "x", false)).not.toContain("squirrel");
+    // A panel with a balloon (drawn on the picture, top-left) gets calm space for it; others don't.
+    expect(comicCellPrompt(ctx, "x", false, "medium", true)).toContain(BALLOON_SPACE);
+    expect(withTempo).not.toContain(BALLOON_SPACE);
     // The camera fits the panel: a wide view for a big panel, a face for a small one.
     expect(comicCellPrompt(ctx, "x", false, "wide")).toContain("wide establishing shot");
     expect(comicCellPrompt(ctx, "x", false, "close")).toContain("close-up");
