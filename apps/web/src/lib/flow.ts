@@ -74,6 +74,11 @@ export function redirectFor(path: string, story: StoryState, parent: ParentState
   if (authPages.includes(path)) return parent.account ? ROUTES.dashboard : null;
   if (!parent.account) return ROUTES.signup;
 
+  // Child profiles need a confirmed email (the server refuses them otherwise: EMAIL_NOT_VERIFIED).
+  // Only an explicit false counts: demo data has no emailVerified at all.
+  const childProfilePages: string[] = [ROUTES.children, ROUTES.addChild];
+  if (childProfilePages.includes(path) && parent.account.emailVerified === false) return ROUTES.verifyEmail;
+
   const parentSetup: string[] = [ROUTES.dashboard, ROUTES.children, ROUTES.addChild];
   if (parentSetup.includes(path)) return null;
   if (!parent.activeChildId) return ROUTES.children;

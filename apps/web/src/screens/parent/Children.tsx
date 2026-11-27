@@ -268,12 +268,12 @@ export function AddChildScreen() {
   const [language, setLanguage] = useState(LANGUAGES[0]);
   const [name, setName] = useState("");
   const [age, setAge] = useState<number | null>(null);
-  // null = follow the age (Explorer under 12, Creator from 12); a tap is the parent's choice.
-  const [chosenMode, setChosenMode] = useState<Mode | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
-  const mode = chosenMode ?? (age === null ? null : modeForAge(age));
+  // The mode always follows the age: under 12 is Explorer, 12 and over is Creator.
+  const mode = age === null ? null : modeForAge(age);
+  const childName = name.trim() || "your child";
   const canSave = !!name.trim() && age !== null && mode !== null && !busy;
 
   const save = async () => {
@@ -349,32 +349,12 @@ export function AddChildScreen() {
               </button>
             ))}
           </div>
-          {age !== null && (
-            <>
-              <Subtle className="mt-3 text-xs">
-                {modeForAge(age) === "junior"
-                  ? `Based on age ${age}, we recommend Explorer Mode. More pictures, guided audio, less typing.`
-                  : `Based on age ${age}, we recommend Creator Mode. Deeper choices, richer words, more of their own writing.`}
-              </Subtle>
-              {/* The parent may pick the other mode; their choice is what gets stored. */}
-              <div className="mt-3 grid grid-cols-2 gap-2" role="radiogroup" aria-label="Story mode">
-                {(["junior", "senior"] as const).map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    role="radio"
-                    aria-checked={mode === m}
-                    onClick={() => setChosenMode(m)}
-                    className={cx(
-                      "h-10 rounded-full border text-sm font-semibold",
-                      mode === m ? "border-brand bg-brand-soft text-brand" : "border-ink/10 bg-[#FAF9FE] text-ink hover:border-brand/40",
-                    )}
-                  >
-                    {MODE_NAME[m]} Mode
-                  </button>
-                ))}
-              </div>
-            </>
+          {age !== null && mode && (
+            <Subtle className="mt-3 text-xs">
+              {mode === "junior"
+                ? `At age ${age}, ${childName} will use Explorer Mode: more pictures, guided audio, less typing.`
+                : `At age ${age}, ${childName} will use Creator Mode: deeper choices, richer words, more of their own writing.`}
+            </Subtle>
           )}
           <ErrorLine message={problem} />
 

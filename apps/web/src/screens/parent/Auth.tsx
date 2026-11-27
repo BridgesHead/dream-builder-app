@@ -265,14 +265,42 @@ export function VerifyEmailScreen() {
   }, [token]);
 
   const loggedIn = !!parent.account;
-  const next = loggedIn ? (
+  // Demo data has no emailVerified at all: only an explicit false means "not confirmed yet".
+  const verified = parent.account?.emailVerified !== false;
+
+  // The parent often opens the email link in another tab, so this tab doesn't know yet.
+  // Ask the server; move on only if the email really is confirmed.
+  const [, navigate] = useLocation();
+  const check = useAction();
+  const [notYet, setNotYet] = useState(false);
+  const checkAgain = () =>
+    void check.run(async () => {
+      setNotYet(false);
+      const session = await auth.restoreSession();
+      if (session && session !== "offline" && session.kind === "parent" && session.user.emailVerified) {
+        if (parent.account) updateParent({ account: { ...parent.account, emailVerified: true } });
+        navigate(ROUTES.children);
+      } else {
+        setNotYet(true);
+      }
+    });
+
+  const next = !loggedIn ? (
+    <LinkButton href={ROUTES.login} className="w-full">
+      Log in <Arrow />
+    </LinkButton>
+  ) : verified ? (
     <LinkButton href={ROUTES.children} className="w-full">
       Continue to child profiles <Arrow />
     </LinkButton>
   ) : (
-    <LinkButton href={ROUTES.login} className="w-full">
-      Log in <Arrow />
-    </LinkButton>
+    <>
+      {notYet && <Notice>We haven't seen the confirmation yet. Please open the link in your email first.</Notice>}
+      <Button className="w-full" disabled={check.busy} onClick={checkAgain}>
+        {check.busy ? "Checking…" : "I've confirmed my email"} <Arrow />
+      </Button>
+      <ErrorNote error={check.error} />
+    </>
   );
   const resendButton = loggedIn && !parent.account?.emailVerified && (
     <Button
